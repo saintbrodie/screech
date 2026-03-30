@@ -82,6 +82,8 @@ async def cv_processor():
     
     hawk_cy_history = []
     last_event_state = -1 # Used to detect changes (0=empty, 1=Freya, 2=Finn, 3=both)
+    pending_state_code = -1
+    pending_state_count = 0
     
     # Load YOLOv8 Nano for speed
     try:
@@ -183,15 +185,31 @@ async def cv_processor():
                 if status_text:
                     nest_state["status"] = status_text
                 
-                # State change detection trigger!
-                if status_text and current_state_code != last_event_state and last_event_state != -1:
-                    log_event(status_text, bird_count)
-                
-                if last_event_state == -1 and status_text:
-                    last_event_state = current_state_code
-                elif status_text:
-                    last_event_state = current_state_code
-                    
+                # State change detection trigger with 3-frame debounce
+                if status_text:
+                    if last_event_state == -1:
+                        last_event_state = current_state_code
+                        # don't log the very first arbitrary state frame
+                    elif current_state_code != last_event_state:
+                        if current_state_code == pending_state_code:
+                            pending_state_count += 1
+                        else:
+                            pending_state_code = current_state_code
+                            pending_state_count = 1
+                            
+                        if pending_state_count >= 3:
+                            last_event_state = current_state_code
+                            
+                            # Database-level deduplication
+                            cursor.execute("SELECT event_text FROM events ORDER BY id DESC LIMIT 1")
+                            last_db_row = cursor.fetchone()
+                            if not last_db_row or last_db_row[0] != status_text:
+                                log_event(status_text, bird_count)
+                                
+                            pending_state_count = 0
+                    else:
+                        pending_state_count = 0
+                        
                 nest_state["last_updated"] = time.time()
             
             await asyncio.to_thread(cap.release)

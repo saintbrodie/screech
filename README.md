@@ -1,11 +1,11 @@
-# S.C.R.E.E.C.H. 🦅💻
+# S.C.R.E.E.C.H. 🦅
 **(Secure Convolutional Raptor Evaluation & Edge Computing Hub)**
 
 A localized, cyberpunk-themed AI dashboard designed to track live activity from the GDIT Red-shouldered Hawk nest. Built directly on top of the live YouTube stream feed.
 
 > **Disclaimer:** This is an unofficial, personal project created by a GDIT employee. The live video stream and nest location belong to GDIT (General Dynamics Information Technology) at their corporate headquarters. This software/tracker is not officially endorsed by, maintained by, or affiliated with GDIT's corporate operations.
 
-![S.C.R.E.E.C.H Dashboard](screenshot.jpg)
+![S.C.R.E.E.C.H Dashboard](Screenshot.jpg)
 
 ## 🚀 Features
 
