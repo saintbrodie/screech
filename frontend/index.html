@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>S.C.R.E.E.C.H.</title>
     <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="background"></div>
@@ -16,8 +16,9 @@
         </header>
 
         <main class="dashboard">
-            <section class="video-section panel glass">
-                <div class="video-wrapper">
+            <div class="main-content">
+                <section class="video-section panel glass">
+                    <div class="video-wrapper">
                     <iframe id="live-player" src="https://www.youtube.com/embed/HRhToy9dA-Q?autoplay=1&mute=1" 
                         title="Hawk Cam Live" frameborder="0" 
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
@@ -26,8 +27,17 @@
                 <div class="status-bar">
                     <span class="pulse-dot"></span>
                     <span id="stream-sys">Connecting...</span>
+                    <button id="notify-btn" class="notify-btn">Alerts [OFF]</button>
                 </div>
             </section>
+            
+            <div class="panel glass facts-panel" style="margin-top: 1.5rem;">
+                <h2>Tracking Intel <span style="font-size: 0.8rem; opacity: 0.5;">// Hawk Facts</span></h2>
+                <div class="fact-content" id="fact-text">
+                    Establishing connection for intel pull...
+                </div>
+            </div>
+        </div>
 
             <aside class="sidebar">
                 <div class="panel glass ai-panel">
@@ -40,29 +50,28 @@
                         <span>Birds Detected: </span>
                         <strong id="ai-count">0</strong>
                     </div>
-                    <div class="meta-info small">
+                    <div class="meta-info">
+                        <span>Behavior: </span>
+                        <strong id="ai-behavior">Scanning...</strong>
+                    </div>
+                    <div class="meta-info small" style="margin-top: 5px; margin-bottom: 1.5rem;">
                         <span>Last scan: </span>
                         <span id="ai-time">--:--:--</span>
                     </div>
-                </div>
 
-                <div class="panel glass weather-panel">
-                    <h2>Local Weather</h2>
-                    <p class="location">Falls Church, VA (GDIT HQ)</p>
+                    <h2>Activity Timeline</h2>
+                    <ul id="timeline-list" class="timeline-list" style="margin-bottom: 1.5rem;">
+                        <li class="empty-state">Querying timeline records...</li>
+                    </ul>
+
+                    <h2>Local Conditions</h2>
+                    <div class="location">Location Data Processing...</div>
                     <div class="weather-data">
                         <div class="temp"><span id="w-temp">--</span>°F</div>
                         <div class="w-misc">
-                            <div>Feels Like: <span id="w-feels">--</span>°F</div>
-                            <div>Humidity: <span id="w-humid">--</span>%</div>
-                            <div>Wind: <span id="w-wind">--</span> mph</div>
+                            H: <span id="w-humid">--</span>% <br>
+                            W: <span id="w-wind">--</span>mph
                         </div>
-                    </div>
-                </div>
-
-                <div class="panel glass facts-panel">
-                    <h2>Hawk Facts</h2>
-                    <div class="fact-content" id="fact-text">
-                        Loading interesting facts...
                     </div>
                 </div>
             </aside>

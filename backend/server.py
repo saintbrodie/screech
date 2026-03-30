@@ -12,6 +12,10 @@ from ultralytics import YOLO
 import requests
 from yt_dlp import YoutubeDL
 import time
+import sqlite3
+import numpy as np
+import datetime
+import os
 
 from fastapi.staticfiles import StaticFiles
 
@@ -26,12 +30,30 @@ app.add_middleware(
 )
 
 
+# Initialize Database
+conn = sqlite3.connect("hawk_data.db", check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        event_text TEXT,
+        hawk_count INTEGER
+    )
+''')
+conn.commit()
+
+def log_event(text, count):
+    cursor.execute("INSERT INTO events (event_text, hawk_count) VALUES (?, ?)", (text, count))
+    conn.commit()
+
 # Global state
 nest_state = {
     "status": "Initializing AI Model...",
     "hawk_count": 0,
     "last_updated": time.time(),
     "stream_health": "Connecting",
+    "behavior": "Unknown"
 }
 
 facts = [
@@ -50,13 +72,16 @@ model = None
 video_id = "HRhToy9dA-Q"
 
 def get_stream_url(vid):
-    ydl_opts = {'format': 'best', 'quiet': True}
+    ydl_opts = {'format': 'best', 'quiet': True, 'no_warnings': True}
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False)
         return info['url']
 
 async def cv_processor():
     global model, nest_state
+    
+    hawk_cy_history = []
+    last_event_state = -1 # Used to detect changes (0=empty, 1=Freya, 2=Finn, 3=both)
     
     # Load YOLOv8 Nano for speed
     try:
@@ -73,10 +98,14 @@ async def cv_processor():
         try:
             # 1. Fetch stream URL
             stream_url = await asyncio.to_thread(get_stream_url, video_id)
-            cap = cv2.VideoCapture(stream_url)
+            
+            # Prevent blocking ASGI main loop
+            cap = await asyncio.to_thread(cv2.VideoCapture, stream_url)
 
-            if not cap.isOpened():
+            is_opened = await asyncio.to_thread(cap.isOpened)
+            if not is_opened:
                 nest_state["stream_health"] = "Failed to open stream"
+                await asyncio.to_thread(cap.release)
                 await asyncio.sleep(10)
                 continue
 
@@ -84,7 +113,7 @@ async def cv_processor():
             
             # Read a few frames to clear the buffer
             for _ in range(5):
-                ret, frame = cap.read()
+                ret, frame = await asyncio.to_thread(cap.read)
             
             if ret and frame is not None:
                 # 2. Inference: COCO class 14 is 'bird', lower conf to 0.15 to increase sensitivity
@@ -93,11 +122,36 @@ async def cv_processor():
                 boxes = results[0].boxes
                 bird_count = len(boxes)
                 
+                # Behavior tracking
+                behavior = "Unknown"
+                if bird_count == 1:
+                    box = boxes[0].xyxy[0].cpu().numpy()
+                    cy = (box[1] + box[3]) / 2.0
+                    hawk_cy_history.append(cy)
+                    if len(hawk_cy_history) > 10:
+                        hawk_cy_history.pop(0)
+                        
+                    if len(hawk_cy_history) == 10:
+                        variance = np.var(hawk_cy_history)
+                        if variance < 20.0:  # low vertical movement variance
+                            behavior = "Incubating / Resting"
+                        else:
+                            behavior = "Active / Feeding"
+                else:
+                    hawk_cy_history.clear()
+                    
+                nest_state["behavior"] = behavior
+                
                 nest_state["hawk_count"] = bird_count
+                
+                current_state_code = 0
+                status_text = ""
+                
                 if bird_count == 0:
                     empty_frames_count += 1
                     if empty_frames_count >= 3:
-                        nest_state["status"] = "Nest appears empty"
+                        status_text = "Nest appears empty"
+                        current_state_code = 0
                 else:
                     empty_frames_count = 0
                     if bird_count == 1:
@@ -107,16 +161,30 @@ async def cv_processor():
                         h, w = frame.shape[:2]
                         ratio = area / (h * w)
                         
-                        # Female hawks are larger. Using 8% ratio as a threshold.
                         hawk_name = "Freya (Female)" if ratio > 0.08 else "Finn (Male)"
-                        nest_state["status"] = f"{hawk_name} is in the nest!"
+                        status_text = f"{hawk_name} is in the nest!"
+                        current_state_code = 1 if ratio > 0.08 else 2
                         nest_state["_debug_ratio"] = float(ratio)
                     else:
-                        nest_state["status"] = "Freya & Finn are in the nest together!"
+                        status_text = "Freya & Finn are in the nest together!"
+                        current_state_code = 3
+                
+                # Use the delayed status update logic to protect against jitter
+                if status_text:
+                    nest_state["status"] = status_text
+                
+                # State change detection trigger!
+                if status_text and current_state_code != last_event_state and last_event_state != -1:
+                    log_event(status_text, bird_count)
+                
+                if last_event_state == -1 and status_text:
+                    last_event_state = current_state_code
+                elif status_text:
+                    last_event_state = current_state_code
                     
                 nest_state["last_updated"] = time.time()
             
-            cap.release()
+            await asyncio.to_thread(cap.release)
             
         except Exception as e:
             nest_state["stream_health"] = "Error"
@@ -151,6 +219,12 @@ def get_weather():
 def get_facts():
     import random
     return {"fact": random.choice(facts)}
+
+@app.get("/api/timeline")
+def get_timeline():
+    cursor.execute("SELECT timestamp, event_text, hawk_count FROM events ORDER BY id DESC LIMIT 10")
+    rows = cursor.fetchall()
+    return [{"timestamp": r[0], "event": r[1], "count": r[2]} for r in rows]
 
 app.mount("/", StaticFiles(directory="../frontend", html=True), name="frontend")
 

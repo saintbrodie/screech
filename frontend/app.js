@@ -1,3 +1,19 @@
+let lastStatus = "";
+let notificationsEnabled = false;
+
+document.getElementById('notify-btn').addEventListener('click', async () => {
+    if (Notification.permission === 'granted') {
+        notificationsEnabled = true;
+        document.getElementById('notify-btn').innerText = "Alerts [ON]";
+    } else if (Notification.permission !== 'denied') {
+        const perm = await Notification.requestPermission();
+        if (perm === 'granted') {
+            notificationsEnabled = true;
+            document.getElementById('notify-btn').innerText = "Alerts [ON]";
+        }
+    }
+});
+
 async function fetchStatus() {
     try {
         const res = await fetch('/api/status');
@@ -5,12 +21,19 @@ async function fetchStatus() {
         
         document.getElementById('ai-text').innerText = data.status;
         document.getElementById('ai-count').innerText = data.hawk_count;
+        document.getElementById('ai-behavior').innerText = data.behavior || "Unknown";
         document.getElementById('stream-sys').innerText = 'Stream ' + data.stream_health;
         
         if (data.last_updated) {
             const date = new Date(data.last_updated * 1000);
             document.getElementById('ai-time').innerText = date.toLocaleTimeString();
         }
+        
+        if (lastStatus !== "" && lastStatus !== data.status && notificationsEnabled) {
+            new Notification("Hawk Tracker Update", { body: data.status });
+        }
+        lastStatus = data.status;
+        
     } catch (err) {
         console.error("Error fetching AI status", err);
     }
@@ -32,7 +55,6 @@ async function fetchWeather() {
         
         if (!data.error) {
             document.getElementById('w-temp').innerText = Math.round(data.temperature_2m);
-            document.getElementById('w-feels').innerText = Math.round(data.apparent_temperature);
             document.getElementById('w-humid').innerText = data.relative_humidity_2m;
             document.getElementById('w-wind').innerText = Math.round(data.wind_speed_10m);
             
@@ -56,13 +78,34 @@ async function fetchFact() {
     }
 }
 
+async function fetchTimeline() {
+    try {
+        const res = await fetch('/api/timeline');
+        const data = await res.json();
+        const list = document.getElementById('timeline-list');
+        list.innerHTML = '';
+        if (data.length === 0) {
+            list.innerHTML = '<li class="empty-state">No events recently.</li>';
+            return;
+        }
+        data.forEach(item => {
+            const li = document.createElement('li');
+            const d = new Date(item.timestamp + 'Z'); // UTC
+            li.innerHTML = `<strong>${d.toLocaleTimeString()}</strong>: ${item.event}`;
+            list.appendChild(li);
+        });
+    } catch(err) {}
+}
+
 function init() {
     fetchStatus();
     fetchWeather();
     fetchFact();
+    fetchTimeline();
     
     // Polling intervals
     setInterval(fetchStatus, 3000); // 3 seconds for AI updates
+    setInterval(fetchTimeline, 3000); 
     setInterval(fetchWeather, 600000); // 10 minutes for weather
     setInterval(fetchFact, 15000); // 15 seconds for facts
 }
