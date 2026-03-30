@@ -46,3 +46,4 @@ venv.bak/
 # OS specific
 .DS_Store
 Thumbs.db
+backend/hawk_data.db
