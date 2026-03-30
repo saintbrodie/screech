@@ -58,6 +58,19 @@ async function fetchWeather() {
             document.getElementById('w-humid').innerText = data.relative_humidity_2m;
             document.getElementById('w-wind').innerText = Math.round(data.wind_speed_10m);
             
+            const weatherEmojis = {
+                0: "☀️", 1: "🌤️", 2: "⛅", 3: "☁️",
+                45: "🌫️", 48: "🌫️",
+                51: "🌧️", 53: "🌧️", 55: "🌧️",
+                61: "🌧️", 63: "🌧️", 65: "🌧️",
+                71: "❄️", 73: "❄️", 75: "❄️",
+                95: "⛈️", 96: "⛈️", 99: "⛈️"
+            };
+            
+            const emoji = weatherEmojis[data.weather_code] || "🛰️";
+            const iconEl = document.getElementById('w-icon');
+            if (iconEl) iconEl.innerText = emoji;
+            
             const desc = weatherCodes[data.weather_code] || "Conditions OK";
             const locationEl = document.querySelector('.location');
             if (locationEl) locationEl.innerText = `Falls Church, VA • ${desc}`;

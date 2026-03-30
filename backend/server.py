@@ -120,25 +120,36 @@ async def cv_processor():
                 results = await asyncio.to_thread(model.predict, frame, classes=[14], conf=0.15, verbose=False)
                 
                 boxes = results[0].boxes
-                bird_count = len(boxes)
+                h, w = frame.shape[:2]
+                
+                valid_boxes = []
+                for b in boxes:
+                    co = b.xyxy[0].cpu().numpy()
+                    area = (co[2] - co[0]) * (co[3] - co[1])
+                    if area / (h * w) >= 0.015:  # Ignore tiny false positives (e.g. bugs/shadows/distant birds)
+                        valid_boxes.append(b)
+                
+                bird_count = len(valid_boxes)
                 
                 # Behavior tracking
                 behavior = "Unknown"
                 if bird_count == 1:
-                    box = boxes[0].xyxy[0].cpu().numpy()
+                    box = valid_boxes[0].xyxy[0].cpu().numpy()
                     cy = (box[1] + box[3]) / 2.0
                     hawk_cy_history.append(cy)
-                    if len(hawk_cy_history) > 10:
+                    # Keep last 6 frames (30 seconds)
+                    if len(hawk_cy_history) > 6:
                         hawk_cy_history.pop(0)
                         
-                    if len(hawk_cy_history) == 10:
+                    if len(hawk_cy_history) >= 3:
                         variance = np.var(hawk_cy_history)
-                        if variance < 20.0:  # low vertical movement variance
+                        if variance < 35.0:  # low vertical movement variance
                             behavior = "Incubating / Resting"
                         else:
                             behavior = "Active / Feeding"
                 else:
-                    hawk_cy_history.clear()
+                    if len(hawk_cy_history) > 0:
+                        hawk_cy_history.pop(0) # smooth clear instead of instant clear
                     
                 nest_state["behavior"] = behavior
                 
@@ -156,9 +167,8 @@ async def cv_processor():
                     empty_frames_count = 0
                     if bird_count == 1:
                         # Differentiate Male vs Female by bounding box area ratio
-                        box = boxes[0].xyxy[0].cpu().numpy() # [x1, y1, x2, y2]
+                        box = valid_boxes[0].xyxy[0].cpu().numpy() # [x1, y1, x2, y2]
                         area = (box[2] - box[0]) * (box[3] - box[1])
-                        h, w = frame.shape[:2]
                         ratio = area / (h * w)
                         
                         hawk_name = "Freya (Female)" if ratio > 0.08 else "Finn (Male)"
