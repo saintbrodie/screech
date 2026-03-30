@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hawk Cam Tracker</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="background"></div>
+    <div class="app-container">
+        <header>
+            <h1>GDIT Hawk Cam Tracker</h1>
+            <p class="subtitle">Live AI stream monitoring of the Red-Shouldered Hawk nesting site.</p>
+        </header>
+
+        <main class="dashboard">
+            <section class="video-section panel glass">
+                <div class="video-wrapper">
+                    <iframe id="live-player" src="https://www.youtube.com/embed/HRhToy9dA-Q?autoplay=1&mute=1" 
+                        title="Hawk Cam Live" frameborder="0" 
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
+                        allowfullscreen></iframe>
+                </div>
+                <div class="status-bar">
+                    <span class="pulse-dot"></span>
+                    <span id="stream-sys">Connecting...</span>
+                </div>
+            </section>
+
+            <aside class="sidebar">
+                <div class="panel glass ai-panel">
+                    <h2>AI Analysis</h2>
+                    <div class="ai-status">
+                        <div class="ai-icon">🦅</div>
+                        <div id="ai-text">Initializing Model...</div>
+                    </div>
+                    <div class="meta-info">
+                        <span>Birds Detected: </span>
+                        <strong id="ai-count">0</strong>
+                    </div>
+                    <div class="meta-info small">
+                        <span>Last scan: </span>
+                        <span id="ai-time">--:--:--</span>
+                    </div>
+                </div>
+
+                <div class="panel glass weather-panel">
+                    <h2>Local Weather</h2>
+                    <p class="location">Falls Church, VA (GDIT HQ)</p>
+                    <div class="weather-data">
+                        <div class="temp"><span id="w-temp">--</span>°F</div>
+                        <div class="w-misc">
+                            <div>Feels Like: <span id="w-feels">--</span>°F</div>
+                            <div>Humidity: <span id="w-humid">--</span>%</div>
+                            <div>Wind: <span id="w-wind">--</span> mph</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel glass facts-panel">
+                    <h2>Hawk Facts</h2>
+                    <div class="fact-content" id="fact-text">
+                        Loading interesting facts...
+                    </div>
+                </div>
+            </aside>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
