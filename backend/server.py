@@ -67,6 +67,7 @@ async def cv_processor():
         return
 
     nest_state["status"] = "Connecting to YouTube stream..."
+    empty_frames_count = 0
     
     while True:
         try:
@@ -86,19 +87,32 @@ async def cv_processor():
                 ret, frame = cap.read()
             
             if ret and frame is not None:
-                # 2. Inference: COCO class 14 is 'bird'
-                results = await asyncio.to_thread(model.predict, frame, classes=[14], verbose=False)
+                # 2. Inference: COCO class 14 is 'bird', lower conf to 0.15 to increase sensitivity
+                results = await asyncio.to_thread(model.predict, frame, classes=[14], conf=0.15, verbose=False)
                 
                 boxes = results[0].boxes
                 bird_count = len(boxes)
                 
                 nest_state["hawk_count"] = bird_count
                 if bird_count == 0:
-                    nest_state["status"] = "Nest appears empty"
-                elif bird_count == 1:
-                    nest_state["status"] = "1 Hawk detected in the nest"
+                    empty_frames_count += 1
+                    if empty_frames_count >= 3:
+                        nest_state["status"] = "Nest appears empty"
                 else:
-                    nest_state["status"] = f"{bird_count} Hawks detected"
+                    empty_frames_count = 0
+                    if bird_count == 1:
+                        # Differentiate Male vs Female by bounding box area ratio
+                        box = boxes[0].xyxy[0].cpu().numpy() # [x1, y1, x2, y2]
+                        area = (box[2] - box[0]) * (box[3] - box[1])
+                        h, w = frame.shape[:2]
+                        ratio = area / (h * w)
+                        
+                        # Female hawks are larger. Using 8% ratio as a threshold.
+                        hawk_name = "Freya (Female)" if ratio > 0.08 else "Finn (Male)"
+                        nest_state["status"] = f"{hawk_name} is in the nest!"
+                        nest_state["_debug_ratio"] = float(ratio)
+                    else:
+                        nest_state["status"] = "Freya & Finn are in the nest together!"
                     
                 nest_state["last_updated"] = time.time()
             
