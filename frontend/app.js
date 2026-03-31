@@ -85,7 +85,7 @@ async function fetchFact() {
         const res = await fetch('/api/facts');
         const data = await res.json();
         
-        document.getElementById('fact-text').innerText = `"${data.fact}"`;
+        document.getElementById('fact-text').innerText = data.fact;
     } catch (err) {
         console.error("Error fetching fact", err);
     }

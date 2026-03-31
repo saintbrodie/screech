@@ -16,8 +16,9 @@ import sqlite3
 import numpy as np
 import datetime
 import os
-
 from fastapi.staticfiles import StaticFiles
+
+# Uvicorn auto-reload trigger for memory clearing
 
 app = FastAPI()
 
@@ -65,14 +66,20 @@ facts = [
     "In flight, Red-shouldered Hawks have a translucent crescent 'window' near their wingtips.",
     "Female Red-shouldered hawks are noticeably larger than the males.",
     "Red-shouldered hawks possess incredible eyesight, roughly 2-3 times more acute than a human's.",
-    "They typically return to the same territory and reuse the same nest year after year."
+    "They typically return to the same territory and reuse the same nest year after year.",
+    "The incubation period for Red-shouldered Hawks is approximately 32 to 40 days.",
+    "Red-shouldered Hawks hunt primarily by stealth, swooping down from a perch to catch prey by surprise.",
+    "Their diet consists mainly of small mammals, amphibians, and reptiles, giving them a very broad menu.",
+    "While incredibly territorial, they have been known to share nesting areas with American Crows.",
+    "Red-shouldered Hawk nests are usually built from sticks and lined with bark, leaves, and sprigs of evergreen.",
+    "The oldest known wild Red-shouldered Hawk lived to be at least 25 years and 10 months old."
 ]
 
 model = None
 video_id = "HRhToy9dA-Q"
 
 def get_stream_url(vid):
-    ydl_opts = {'format': 'best', 'quiet': True, 'no_warnings': True}
+    ydl_opts = {'format': 'best', 'quiet': True, 'no_warnings': True, 'socket_timeout': 15}
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False)
         return info['url']
@@ -107,19 +114,23 @@ async def cv_processor():
             is_opened = await asyncio.to_thread(cap.isOpened)
             if not is_opened:
                 nest_state["stream_health"] = "Failed to open stream"
+                nest_state["status"] = "Camera feed completely unresponsive."
                 await asyncio.to_thread(cap.release)
                 await asyncio.sleep(10)
                 continue
 
             nest_state["stream_health"] = "Live"
+            if nest_state["status"] == "Connecting to YouTube stream...":
+                nest_state["status"] = "Analyzing video feed..."
+            
             
             # Read a few frames to clear the buffer
             for _ in range(5):
                 ret, frame = await asyncio.to_thread(cap.read)
             
             if ret and frame is not None:
-                # 2. Inference: COCO class 14 is 'bird', lower conf to 0.15 to increase sensitivity
-                results = await asyncio.to_thread(model.predict, frame, classes=[14], conf=0.15, verbose=False)
+                # 2. Inference: COCO class 14 is 'bird', lower conf to 0.08 to increase sensitivity for resting
+                results = await asyncio.to_thread(model.predict, frame, classes=[14], conf=0.08, verbose=False)
                 
                 boxes = results[0].boxes
                 h, w = frame.shape[:2]
@@ -128,42 +139,45 @@ async def cv_processor():
                 for b in boxes:
                     co = b.xyxy[0].cpu().numpy()
                     area = (co[2] - co[0]) * (co[3] - co[1])
-                    if area / (h * w) >= 0.015:  # Ignore tiny false positives (e.g. bugs/shadows/distant birds)
+                    if area / (h * w) >= 0.005:  # Lowered from 0.015 to detect partially obscured hawks
                         valid_boxes.append(b)
                 
                 bird_count = len(valid_boxes)
                 
                 # Behavior tracking
                 behavior = "Unknown"
+                if bird_count > 0:
+                    behavior = "Incubating / Resting" # Default assumption
+                    
                 if bird_count == 1:
                     box = valid_boxes[0].xyxy[0].cpu().numpy()
                     cy = (box[1] + box[3]) / 2.0
                     hawk_cy_history.append(cy)
-                    # Keep last 6 frames (30 seconds)
+                    # Keep last 6 frames
                     if len(hawk_cy_history) > 6:
                         hawk_cy_history.pop(0)
                         
-                    if len(hawk_cy_history) >= 3:
+                    if len(hawk_cy_history) >= 2:
                         variance = np.var(hawk_cy_history)
-                        if variance < 35.0:  # low vertical movement variance
-                            behavior = "Incubating / Resting"
-                        else:
+                        # Require a massive vertical center variance to classify as feeding
+                        if variance >= 200.0:  
                             behavior = "Active / Feeding"
                 else:
                     if len(hawk_cy_history) > 0:
-                        hawk_cy_history.pop(0) # smooth clear instead of instant clear
+                        hawk_cy_history.pop(0)
                     
                 nest_state["behavior"] = behavior
                 
                 nest_state["hawk_count"] = bird_count
                 
                 current_state_code = 0
-                status_text = ""
+                raw_status_text = ""
                 
                 if bird_count == 0:
                     empty_frames_count += 1
-                    if empty_frames_count >= 3:
-                        status_text = "Nest appears empty"
+                    # Give it 8 consecutive loops (40 seconds) of NO birds before we even consider it empty
+                    if empty_frames_count >= 8:
+                        raw_status_text = "Nest appears empty"
                         current_state_code = 0
                 else:
                     empty_frames_count = 0
@@ -174,22 +188,18 @@ async def cv_processor():
                         ratio = area / (h * w)
                         
                         hawk_name = "Freya (Female)" if ratio > 0.08 else "Finn (Male)"
-                        status_text = f"{hawk_name} is in the nest!"
+                        raw_status_text = f"{hawk_name} is in the nest!"
                         current_state_code = 1 if ratio > 0.08 else 2
                         nest_state["_debug_ratio"] = float(ratio)
                     else:
-                        status_text = "Freya & Finn are in the nest together!"
+                        raw_status_text = "Freya & Finn are in the nest together!"
                         current_state_code = 3
                 
-                # Use the delayed status update logic to protect against jitter
-                if status_text:
-                    nest_state["status"] = status_text
-                
-                # State change detection trigger with 3-frame debounce
-                if status_text:
+                # Protect both the UI and Database against jitter
+                if raw_status_text:
                     if last_event_state == -1:
                         last_event_state = current_state_code
-                        # don't log the very first arbitrary state frame
+                        nest_state["status"] = raw_status_text # Instantly update initial state
                     elif current_state_code != last_event_state:
                         if current_state_code == pending_state_code:
                             pending_state_count += 1
@@ -197,20 +207,24 @@ async def cv_processor():
                             pending_state_code = current_state_code
                             pending_state_count = 1
                             
+                        # Debounce UI and Database together (3 loops = 15s)
                         if pending_state_count >= 3:
                             last_event_state = current_state_code
+                            nest_state["status"] = raw_status_text
                             
                             # Database-level deduplication
                             cursor.execute("SELECT event_text FROM events ORDER BY id DESC LIMIT 1")
                             last_db_row = cursor.fetchone()
-                            if not last_db_row or last_db_row[0] != status_text:
-                                log_event(status_text, bird_count)
+                            if not last_db_row or last_db_row[0] != raw_status_text:
+                                log_event(raw_status_text, bird_count)
                                 
                             pending_state_count = 0
                     else:
                         pending_state_count = 0
-                        
-                nest_state["last_updated"] = time.time()
+            else:
+                nest_state["status"] = "Awaiting video frame..."
+                
+            nest_state["last_updated"] = time.time()
             
             await asyncio.to_thread(cap.release)
             
@@ -243,6 +257,9 @@ def get_weather():
         pass
     return {"error": "Could not fetch weather"}
 
+
+
+
 @app.get("/api/facts")
 def get_facts():
     import random
@@ -250,9 +267,7 @@ def get_facts():
 
 @app.get("/api/timeline")
 def get_timeline():
-    cursor.execute("SELECT timestamp, event_text, hawk_count FROM events ORDER BY id DESC LIMIT 10")
-    rows = cursor.fetchall()
+    rows = conn.execute("SELECT timestamp, event_text, hawk_count FROM events ORDER BY id DESC LIMIT 10").fetchall()
     return [{"timestamp": r[0], "event": r[1], "count": r[2]} for r in rows]
 
 app.mount("/", StaticFiles(directory="../frontend", html=True), name="frontend")
-
