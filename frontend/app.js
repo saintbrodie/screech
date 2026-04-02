@@ -14,30 +14,6 @@ document.getElementById('notify-btn').addEventListener('click', async () => {
     }
 });
 
-async function fetchStatus() {
-    try {
-        const res = await fetch('/api/status');
-        const data = await res.json();
-        
-        document.getElementById('ai-text').innerText = data.status;
-        document.getElementById('ai-count').innerText = data.hawk_count;
-        document.getElementById('ai-behavior').innerText = data.behavior || "Unknown";
-        document.getElementById('stream-sys').innerText = 'Stream ' + data.stream_health;
-        
-        if (data.last_updated) {
-            const date = new Date(data.last_updated * 1000);
-            document.getElementById('ai-time').innerText = date.toLocaleTimeString();
-        }
-        
-        if (lastStatus !== "" && lastStatus !== data.status && notificationsEnabled) {
-            new Notification("Hawk Tracker Update", { body: data.status });
-        }
-        lastStatus = data.status;
-        
-    } catch (err) {
-        console.error("Error fetching AI status", err);
-    }
-}
 
 const weatherCodes = {
     0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
@@ -48,79 +24,80 @@ const weatherCodes = {
     95: "Thunderstorm"
 };
 
-async function fetchWeather() {
+
+async function fetchAll() {
     try {
-        const res = await fetch('/api/weather');
+        const res = await fetch('/api/data');
         const data = await res.json();
         
-        if (!data.error) {
-            document.getElementById('w-temp').innerText = Math.round(data.temperature_2m);
-            document.getElementById('w-humid').innerText = data.relative_humidity_2m;
-            document.getElementById('w-wind').innerText = Math.round(data.wind_speed_10m);
+        // 1. Update Status
+        const status = data.status;
+        document.getElementById('ai-text').innerText = status.status;
+        document.getElementById('ai-count').innerText = status.hawk_count;
+        document.getElementById('ai-behavior').innerText = status.behavior || "Unknown";
+        document.getElementById('stream-sys').innerText = 'Stream ' + status.stream_health;
+        
+        if (status.last_updated) {
+            const date = new Date(status.last_updated * 1000);
+            document.getElementById('ai-time').innerText = date.toLocaleTimeString();
+        }
+        
+        if (lastStatus !== "" && lastStatus !== status.status && notificationsEnabled) {
+            new Notification("Hawk Tracker Update", { body: status.status });
+        }
+        lastStatus = status.status;
+
+        // 2. Update Timeline
+        const list = document.getElementById('timeline-list');
+        list.innerHTML = '';
+        if (data.timeline.length === 0) {
+            list.innerHTML = '<li class="empty-state">No events recently.</li>';
+        } else {
+            data.timeline.forEach(item => {
+                const li = document.createElement('li');
+                const d = new Date(item.timestamp + 'Z');
+                li.innerHTML = `<strong>${d.toLocaleTimeString()}</strong>: ${item.event}`;
+                list.appendChild(li);
+            });
+        }
+
+        // 3. Update Weather (only if data exists)
+        if (data.weather && !data.weather.error) {
+            const w = data.weather;
+            document.getElementById('w-temp').innerText = Math.round(w.temperature_2m);
+            document.getElementById('w-humid').innerText = w.relative_humidity_2m;
+            document.getElementById('w-wind').innerText = Math.round(w.wind_speed_10m);
             
             const weatherEmojis = {
-                0: "☀️", 1: "🌤️", 2: "⛅", 3: "☁️",
-                45: "🌫️", 48: "🌫️",
-                51: "🌧️", 53: "🌧️", 55: "🌧️",
-                61: "🌧️", 63: "🌧️", 65: "🌧️",
-                71: "❄️", 73: "❄️", 75: "❄️",
-                95: "⛈️", 96: "⛈️", 99: "⛈️"
+                0: "☀️", 1: "🌤️", 2: "⛅", 3: "☁️", 45: "🌫️", 48: "🌫️",
+                51: "🌧️", 53: "🌧️", 55: "🌧️", 61: "🌧️", 63: "🌧️", 65: "🌧️",
+                71: "❄️", 73: "❄️", 75: "❄️", 95: "⛈️", 96: "⛈️", 99: "⛈️"
             };
             
-            const emoji = weatherEmojis[data.weather_code] || "🛰️";
+            const emoji = weatherEmojis[w.weather_code] || "🛰️";
             const iconEl = document.getElementById('w-icon');
             if (iconEl) iconEl.innerText = emoji;
             
-            const desc = weatherCodes[data.weather_code] || "Conditions OK";
+            const desc = weatherCodes[w.weather_code] || "Conditions OK";
             const locationEl = document.querySelector('.location');
             if (locationEl) locationEl.innerText = `Falls Church, VA • ${desc}`;
         }
-    } catch (err) {
-        console.error("Error fetching weather", err);
-    }
-}
 
-async function fetchFact() {
-    try {
-        const res = await fetch('/api/facts');
-        const data = await res.json();
-        
-        document.getElementById('fact-text').innerText = data.fact;
-    } catch (err) {
-        console.error("Error fetching fact", err);
-    }
-}
-
-async function fetchTimeline() {
-    try {
-        const res = await fetch('/api/timeline');
-        const data = await res.json();
-        const list = document.getElementById('timeline-list');
-        list.innerHTML = '';
-        if (data.length === 0) {
-            list.innerHTML = '<li class="empty-state">No events recently.</li>';
-            return;
+        // 4. Update Facts (only rotated on the server side)
+        if (data.fact) {
+            document.getElementById('fact-text').innerText = data.fact;
         }
-        data.forEach(item => {
-            const li = document.createElement('li');
-            const d = new Date(item.timestamp + 'Z'); // UTC
-            li.innerHTML = `<strong>${d.toLocaleTimeString()}</strong>: ${item.event}`;
-            list.appendChild(li);
-        });
-    } catch(err) {}
+
+    } catch (err) {
+        console.error("Critical Poll Error", err);
+    }
 }
 
 function init() {
-    fetchStatus();
-    fetchWeather();
-    fetchFact();
-    fetchTimeline();
+    fetchAll();
     
-    // Polling intervals
-    setInterval(fetchStatus, 3000); // 3 seconds for AI updates
-    setInterval(fetchTimeline, 3000); 
-    setInterval(fetchWeather, 600000); // 10 minutes for weather
-    setInterval(fetchFact, 15000); // 15 seconds for facts
+    // Unified optimal polling (5 seconds - reduces noise while remaining responsive)
+    setInterval(fetchAll, 5000); 
 }
 
 document.addEventListener('DOMContentLoaded', init);

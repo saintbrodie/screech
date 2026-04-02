@@ -267,7 +267,32 @@ def get_facts():
 
 @app.get("/api/timeline")
 def get_timeline():
-    rows = conn.execute("SELECT timestamp, event_text, hawk_count FROM events ORDER BY id DESC LIMIT 10").fetchall()
+    rows = cursor.execute("SELECT timestamp, event_text, hawk_count FROM events ORDER BY id DESC LIMIT 10").fetchall()
     return [{"timestamp": r[0], "event": r[1], "count": r[2]} for r in rows]
+
+@app.get("/api/data")
+def get_bulk_data():
+    """Consolidated endpoint for terminal dashboard efficiency."""
+    import random
+    rows = cursor.execute("SELECT timestamp, event_text, hawk_count FROM events ORDER BY id DESC LIMIT 10").fetchall()
+    
+    # Optional weather (only occasionally fetched)
+    weather = None
+    try:
+        lat = 38.8681
+        lon = -77.2183
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&temperature_unit=fahrenheit&wind_speed_unit=mph"
+        response = requests.get(url, timeout=5).json()
+        if "current" in response:
+            weather = response["current"]
+    except Exception:
+        pass
+
+    return {
+        "status": nest_state,
+        "timeline": [{"timestamp": r[0], "event": r[1], "count": r[2]} for r in rows],
+        "fact": random.choice(facts),
+        "weather": weather
+    }
 
 app.mount("/", StaticFiles(directory="../frontend", html=True), name="frontend")
