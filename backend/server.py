@@ -102,19 +102,29 @@ async def cv_processor():
 
     nest_state["status"] = "Connecting to YouTube stream..."
     empty_frames_count = 0
+    stream_url = None
     
     while True:
         try:
-            # 1. Fetch stream URL
-            stream_url = await asyncio.to_thread(get_stream_url, video_id)
+            # 1. Fetch stream URL dynamically to avoid rate limits
+            if not stream_url:
+                try:
+                    stream_url = await asyncio.to_thread(get_stream_url, video_id)
+                except Exception as e:
+                    nest_state["stream_health"] = "YouTube API Error"
+                    nest_state["status"] = f"yt-dlp error: {e}"
+                    stream_url = None
+                    await asyncio.sleep(10)
+                    continue
             
             # Prevent blocking ASGI main loop
-            cap = await asyncio.to_thread(cv2.VideoCapture, stream_url)
+            cap = await asyncio.to_thread(cv2.VideoCapture, stream_url, cv2.CAP_FFMPEG)
 
             is_opened = await asyncio.to_thread(cap.isOpened)
             if not is_opened:
                 nest_state["stream_health"] = "Failed to open stream"
                 nest_state["status"] = "Camera feed completely unresponsive."
+                stream_url = None # Force url refresh
                 await asyncio.to_thread(cap.release)
                 await asyncio.sleep(10)
                 continue
@@ -231,6 +241,7 @@ async def cv_processor():
         except Exception as e:
             nest_state["stream_health"] = "Error"
             nest_state["status"] = f"Stream read error: {e}"
+            stream_url = None # Force a refresh if the stream drops
         
         # Poll every 5 seconds to reduce load
         await asyncio.sleep(5)
