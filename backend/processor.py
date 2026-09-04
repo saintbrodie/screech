@@ -294,7 +294,16 @@ class HawkProcessor:
         self.started_at = time.time()
         try:
             self.state["status"] = "Loading AI model..."
-            await asyncio.to_thread(self.detector.load)
+            try:
+                await asyncio.to_thread(self.detector.load)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.state["stream_health"] = "Offline"
+                self.state["status"] = f"Model error: {exc}"
+                self.state["raw_status"] = "AI model unavailable"
+                return
+
             self.model_loaded = True
             self.state["status"] = "Connecting to video source..."
 
