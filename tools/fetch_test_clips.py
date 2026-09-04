@@ -78,6 +78,10 @@ def download_manifest(manifest_path: Path, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for clip in manifest:
+        if clip.get("enabled", True) is False:
+            print(f"Skipping disabled fixture entry: {clip.get('name', '<unnamed>')}")
+            continue
+
         name = clip["name"]
         url = clip["url"]
         start = float(clip["start"])
