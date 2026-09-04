@@ -126,14 +126,14 @@ def main() -> None:
 
     capture.release()
 
-    aggregate = {}
-    for label in labels:
-        aggregate[label] = round(
-            statistics.fmean(sample["scores"][label] for sample in samples), 5
+    aggregate = {
+        label: (
+            round(statistics.fmean(sample["scores"][label] for sample in samples), 5)
             if samples
-            else 0.0,
-            5,
+            else 0.0
         )
+        for label in labels
+    }
 
     output = {
         "clip": str(args.clip),
