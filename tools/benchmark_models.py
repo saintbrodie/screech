@@ -30,6 +30,21 @@ def load_expected_counts(manifest_path: Path | None) -> dict[str, int]:
     return expected
 
 
+def warmup_detector(detector: HawkDetector, clip: Path) -> None:
+    """Run one untimed inference so model initialization does not skew latency."""
+    capture = cv2.VideoCapture(str(clip))
+    try:
+        if not capture.isOpened():
+            raise RuntimeError(f"Could not open warmup clip {clip}")
+        ok, frame = capture.read()
+        if not ok or frame is None:
+            raise RuntimeError(f"Could not read warmup frame from {clip}")
+        detector.analyze(frame)
+        detector.cy_history.clear()
+    finally:
+        capture.release()
+
+
 def analyze_clip(
     clip: Path,
     detector: HawkDetector,
@@ -92,27 +107,32 @@ def analyze_clip(
         "mean_inference_ms": (
             round(statistics.fmean(latencies) * 1000.0, 2) if latencies else None
         ),
+        "median_inference_ms": (
+            round(statistics.median(latencies) * 1000.0, 2) if latencies else None
+        ),
         "count_histogram": histogram,
     }
 
 
 def print_summary(results: list[dict[str, Any]]) -> None:
     header = (
-        f"{'MODEL':<16} {'CLIP':<34} {'N':>5} {'DETECT%':>8} "
-        f"{'COUNT-ACC%':>11} {'CONF':>7} {'MS':>9}"
+        f"{'MODEL':<16} {'CLIP':<32} {'N':>5} {'DETECT%':>8} "
+        f"{'COUNT-ACC%':>11} {'CONF':>7} {'MEAN MS':>9} {'P50 MS':>8}"
     )
     print(header)
     print("-" * len(header))
     for result in results:
         acc = result["exact_count_accuracy_pct"]
         confidence = result["mean_confidence"]
-        latency = result["mean_inference_ms"]
+        mean_latency = result["mean_inference_ms"]
+        median_latency = result["median_inference_ms"]
         print(
-            f"{result['model']:<16} {result['clip']:<34} "
+            f"{result['model']:<16} {result['clip']:<32} "
             f"{result['sampled_frames']:>5} {result['detection_rate_pct']:>8.1f} "
             f"{(f'{acc:.1f}' if acc is not None else '--'):>11} "
             f"{(f'{confidence:.3f}' if confidence is not None else '--'):>7} "
-            f"{(f'{latency:.1f}' if latency is not None else '--'):>9}"
+            f"{(f'{mean_latency:.1f}' if mean_latency is not None else '--'):>9} "
+            f"{(f'{median_latency:.1f}' if median_latency is not None else '--'):>8}"
         )
 
 
@@ -163,6 +183,8 @@ def main() -> None:
         detector = HawkDetector(model_settings)
         print(f"Loading {model_name}...")
         detector.load()
+        print(f"Warming {model_name} on {clips[0].name}...")
+        warmup_detector(detector, clips[0])
 
         for clip in clips:
             result = analyze_clip(
