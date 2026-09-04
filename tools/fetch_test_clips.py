@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 from yt_dlp import YoutubeDL
-from yt_dlp.utils import download_range_func
+from yt_dlp.utils import DownloadError, download_range_func
 
 
 DEFAULT_CHANNEL = "https://www.youtube.com/@GDIT-HawkCam"
+DEFAULT_TABS = ("videos", "streams")
 
 
 def canonical_watch_url(item: dict[str, Any]) -> str | None:
@@ -24,28 +26,50 @@ def canonical_watch_url(item: dict[str, Any]) -> str | None:
     return None
 
 
-def discover(channel_url: str, limit: int) -> list[dict[str, Any]]:
+def discover(
+    channel_url: str,
+    limit_per_tab: int,
+    tabs: tuple[str, ...] = DEFAULT_TABS,
+) -> list[dict[str, Any]]:
+    """Discover ordinary uploads and archived livestreams, deduplicated by video ID."""
     options = {
         "quiet": True,
         "no_warnings": True,
         "extract_flat": "in_playlist",
-        "playlistend": limit,
+        "playlistend": limit_per_tab,
     }
-    with YoutubeDL(options) as ydl:
-        info = ydl.extract_info(f"{channel_url.rstrip('/')}/videos", download=False)
 
-    entries = []
-    for item in info.get("entries") or []:
-        entries.append(
-            {
-                "id": item.get("id"),
-                "title": item.get("title"),
-                "url": canonical_watch_url(item),
-                "duration": item.get("duration"),
-                "upload_date": item.get("upload_date"),
-                "timestamp": item.get("timestamp"),
-            }
-        )
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    with YoutubeDL(options) as ydl:
+        for tab in tabs:
+            tab_url = f"{channel_url.rstrip('/')}/{tab}"
+            try:
+                info = ydl.extract_info(tab_url, download=False)
+            except DownloadError as exc:
+                print(f"Warning: could not inspect {tab_url}: {exc}", file=sys.stderr)
+                continue
+
+            for item in info.get("entries") or []:
+                video_id = item.get("id")
+                url = canonical_watch_url(item)
+                dedupe_key = str(video_id or url or item.get("title"))
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                entries.append(
+                    {
+                        "id": video_id,
+                        "title": item.get("title"),
+                        "url": url,
+                        "duration": item.get("duration"),
+                        "upload_date": item.get("upload_date"),
+                        "timestamp": item.get("timestamp"),
+                        "source_tab": tab,
+                    }
+                )
+
     return entries
 
 
@@ -78,13 +102,25 @@ def download_manifest(manifest_path: Path, output_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Discover GDIT Hawk Cam uploads or fetch timestamped local regression clips."
+        description="Discover GDIT Hawk Cam uploads/streams or fetch timestamped regression clips."
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     discover_parser = sub.add_parser("discover")
     discover_parser.add_argument("--channel", default=DEFAULT_CHANNEL)
-    discover_parser.add_argument("--limit", type=int, default=20)
+    discover_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum entries to inspect per selected channel tab.",
+    )
+    discover_parser.add_argument(
+        "--tabs",
+        nargs="+",
+        choices=("videos", "streams"),
+        default=list(DEFAULT_TABS),
+        help="Channel tabs to inspect. Defaults to both videos and archived streams.",
+    )
     discover_parser.add_argument(
         "--output",
         type=Path,
@@ -106,10 +142,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "discover":
-        entries = discover(args.channel, args.limit)
+        entries = discover(args.channel, args.limit, tuple(args.tabs))
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(entries, indent=2), encoding="utf-8")
-        print(f"Wrote {len(entries)} entries to {args.output}")
+        print(f"Wrote {len(entries)} deduplicated entries to {args.output}")
         return
 
     download_manifest(args.manifest, args.output_dir)
