@@ -1,5 +1,12 @@
 [
   {
+    "name": "gdit_2026_stream_smoke",
+    "url": "https://www.youtube.com/watch?v=QTSbWE_3IOw",
+    "start": 0.0,
+    "end": 30.0,
+    "notes": "Unlabeled public GDIT HawkCam upload from 2026-03-13. Use this only to smoke-test YouTube extraction and the analysis pipeline; inspect the footage before assigning expected_count or behavior labels."
+  },
+  {
     "name": "one_hawk_resting_example",
     "url": "https://www.youtube.com/watch?v=REPLACE_WITH_GDIT_VIDEO_ID",
     "start": 120.0,
