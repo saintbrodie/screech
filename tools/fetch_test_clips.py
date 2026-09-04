@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from yt_dlp import YoutubeDL
+from yt_dlp.utils import download_range_func
 
 
 DEFAULT_CHANNEL = "https://www.youtube.com/@GDIT-HawkCam"
@@ -60,12 +61,14 @@ def download_manifest(manifest_path: Path, output_dir: Path) -> None:
         if end <= start:
             raise ValueError(f"{name}: end must be after start")
 
+        # yt-dlp's CLI calls this feature --download-sections, but the Python
+        # API consumes a callable in the `download_ranges` option.
         options = {
             "quiet": False,
             "no_warnings": False,
             "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
             "merge_output_format": "mp4",
-            "download_sections": [f"*{start}-{end}"],
+            "download_ranges": download_range_func([], [[start, end]]),
             "force_keyframes_at_cuts": True,
             "outtmpl": str(output_dir / f"{name}.%(ext)s"),
         }
