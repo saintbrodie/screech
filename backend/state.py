@@ -6,8 +6,11 @@ from dataclasses import dataclass
 STATE_EMPTY = 0
 STATE_FREYA = 1
 STATE_FINN = 2
-STATE_BOTH = 3
+STATE_MULTIPLE = 3
 STATE_UNKNOWN_HAWK = 4
+
+# Backwards-compatible alias for code/tests written against the first refactor.
+STATE_BOTH = STATE_MULTIPLE
 
 
 @dataclass(frozen=True)
@@ -19,7 +22,12 @@ class StableTransition:
 
 
 class NestStateMachine:
-    """Debounce noisy detector output into a stable nest state."""
+    """Debounce noisy detector output into a stable nest state.
+
+    The generic detector knows that it saw COCO-class birds. It does not know that
+    two simultaneous boxes are definitely Freya and Finn, so multi-bird states are
+    intentionally identity-neutral.
+    """
 
     def __init__(self, empty_confirmations: int = 8, state_confirmations: int = 3) -> None:
         self.empty_confirmations = max(1, empty_confirmations)
@@ -38,7 +46,7 @@ class NestStateMachine:
 
         self.empty_count = 0
         if hawk_count >= 2:
-            return STATE_BOTH
+            return STATE_MULTIPLE
         if identity == "freya":
             return STATE_FREYA
         if identity == "finn":
@@ -53,8 +61,8 @@ class NestStateMachine:
             return "Freya (Female) is in the nest!", 1, "arrival"
         if state_code == STATE_FINN:
             return "Finn (Male) is in the nest!", 1, "arrival"
-        if state_code == STATE_BOTH:
-            return "Freya & Finn are in the nest together!", 2, "both_present"
+        if state_code == STATE_MULTIPLE:
+            return "Multiple birds are in the nest", 2, "multiple_present"
         return "A hawk is in the nest (identity uncertain)", 1, "arrival_unknown"
 
     def update(self, hawk_count: int, identity: str = "unknown") -> StableTransition | None:

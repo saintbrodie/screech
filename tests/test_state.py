@@ -1,4 +1,4 @@
-from backend.state import NestStateMachine, STATE_EMPTY, STATE_FREYA
+from backend.state import NestStateMachine, STATE_EMPTY, STATE_FREYA, STATE_MULTIPLE
 
 
 def test_initial_non_empty_state_commits_immediately():
@@ -28,3 +28,14 @@ def test_transient_identity_jitter_does_not_change_stable_state():
     assert machine.update(1, "finn") is None
     assert machine.update(1, "freya") is None
     assert machine.stable_state == STATE_FREYA
+
+
+def test_multiple_generic_birds_do_not_claim_freya_and_finn():
+    machine = NestStateMachine(empty_confirmations=1, state_confirmations=1)
+    transition = machine.update(2, "unknown")
+
+    assert transition is not None
+    assert transition.state_code == STATE_MULTIPLE
+    assert transition.event_type == "multiple_present"
+    assert "Freya" not in transition.status
+    assert "Finn" not in transition.status

@@ -20,7 +20,7 @@ S.C.R.E.E.C.H. is a local, cyberpunk-themed AI dashboard for tracking activity f
 - **Cached Open-Meteo weather** so open dashboards do not make a weather request every five seconds.
 - **Browser notifications** for stable state changes.
 - **Health endpoint** for model, source, frame age, and database status.
-- **Offseason regression tooling** for discovering GDIT Hawk Cam uploads, downloading timestamped local clips, and running the detector over them.
+- **Offseason regression tooling** for discovering GDIT Hawk Cam uploads, downloading timestamped local clips, comparing detector models, and probing multimodal behavior classification.
 
 ## Requirements
 
@@ -95,6 +95,8 @@ Important settings:
 
 The original `backend/hawk_data.db` location remains the default so existing history is preserved. New columns are added automatically.
 
+Relative `SCREECH_VIDEO_SOURCE` fixture paths are resolved from either the current working directory or the repository root, so the same `.env` works whether Uvicorn is launched from the repo root or elsewhere.
+
 ## Offseason testing with GDIT Hawk Cam clips
 
 Video fixtures are deliberately not checked into Git. Instead, the repo includes tooling to build a local regression set from the public GDIT Hawk Cam channel.
@@ -105,12 +107,12 @@ Discover recent uploads:
 uv run python tools\fetch_test_clips.py discover
 ```
 
-This writes `tests/fixtures/discovered.json`. Review the videos and choose timestamp ranges that cover useful cases:
+This writes `tests/fixtures/discovered.json` with canonical YouTube watch URLs. Review the videos and choose timestamp ranges that cover useful cases:
 
 - empty nest
 - one hawk resting
 - one hawk moving
-- both hawks present
+- multiple birds present
 - arrival and departure transitions
 - partial occlusion
 - unusual lighting / weather
@@ -128,18 +130,56 @@ Add the chosen URLs and timestamps, then fetch only those short sections:
 uv run python tools\fetch_test_clips.py fetch
 ```
 
+For homogeneous clips you can add `"expected_count": 0`, `1`, or `2` to the manifest. Leave it out of transition clips whose count intentionally changes.
+
 Analyze a saved clip without running the web server:
 
 ```powershell
 uv run python tools\analyze_clip.py tests\fixtures\clips\hawk_arrival.mp4
 ```
 
-That writes JSON detections plus annotated sampled frames. This is the intended workflow for comparing models and thresholds before the next nesting season.
+That writes JSON detections plus annotated sampled frames.
 
-You can also run the full dashboard against a local fixture:
+### Compare YOLO26 against YOLOv8
+
+Once the fixture set exists, run both detectors over the exact same frames:
 
 ```powershell
-set SCREECH_VIDEO_SOURCE=C:\path\to\hawk_clip.mp4
+uv run python tools\benchmark_models.py
+```
+
+The default comparison is `yolo26n.pt` vs `yolov8n.pt`. It reports detection rate, exact-count accuracy where `expected_count` labels exist, mean confidence, count histograms, and mean inference time. Results are written to `tests/fixtures/benchmark-results.json`.
+
+You can add other candidates without changing code:
+
+```powershell
+uv run python tools\benchmark_models.py --models yolo26n.pt yolo11n.pt yolov8n.pt
+```
+
+Do not choose the production model by version number alone; keep whichever performs best on the actual nest footage at an acceptable inference cost.
+
+### Experimental CLIP behavior probe
+
+A publicly described GDIT Hawk-Cam internship project used a fine-tuned YOLOv8 detector with CLIP-style multimodal classification for hawk behavior. Screech now includes an **off-path experiment** for evaluating that general idea on the archived regression set without adding CLIP to the live server by default.
+
+Install the optional dependency:
+
+```powershell
+uv sync --extra clip
+```
+
+Then probe a fixture:
+
+```powershell
+uv run --extra clip python tools\clip_behavior_probe.py tests\fixtures\clips\one_hawk_resting.mp4
+```
+
+The default prompts compare `empty`, `resting`, `active`, and `multiple` scene descriptions and write per-sample probabilities to JSON. This is deliberately a benchmark/prototyping tool, **not** evidence that zero-shot CLIP is already accurate enough for production. If the archived clips show a useful signal, the next step is to move from generic prompts to a labeled crop dataset and a validated classifier.
+
+### Run the dashboard against a fixture
+
+```powershell
+set SCREECH_VIDEO_SOURCE=tests\fixtures\clips\one_hawk_resting.mp4
 set SCREECH_SCAN_INTERVAL_SECONDS=0.25
 uv run uvicorn backend.server:app --host 127.0.0.1 --port 8000
 ```
@@ -160,15 +200,17 @@ Runtime snapshots are served from `/snapshots/...`.
 
 ## Detection notes
 
-The current model still detects the generic COCO `bird` class; this is not yet a species-specific hawk model.
+The current production path still detects the generic COCO `bird` class; this is not yet a species-specific hawk model.
 
-Freya/Finn naming remains an **experimental size heuristic** because female Red-shouldered Hawks are larger. S.C.R.E.E.C.H. now has an uncertainty band and stores event crops specifically so that a real identity classifier can be trained later. Set:
+Freya/Finn naming remains an **experimental size heuristic** because female Red-shouldered Hawks are larger. S.C.R.E.E.C.H. has an uncertainty band and stores event crops specifically so that a real identity classifier can be trained later. Set:
 
 ```text
 SCREECH_IDENTITY_MODE=generic
 ```
 
 to disable identity guesses entirely.
+
+The generic detector also does not assume that two simultaneous bird boxes are definitely Freya and Finn; multi-bird stable states are intentionally identity-neutral.
 
 Likewise, `Active / Moving` means the normalized vertical center of the detected bird is moving enough to cross the configured threshold. It intentionally does not claim that every such motion is feeding.
 
@@ -200,6 +242,8 @@ frontend/
 tools/
   fetch_test_clips.py
   analyze_clip.py
+  benchmark_models.py
+  clip_behavior_probe.py
 tests/
   test_state.py
   test_database.py

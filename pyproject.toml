@@ -18,6 +18,9 @@ dependencies = [
 dev = [
     "pytest>=8.0,<10",
 ]
+clip = [
+    "open-clip-torch==3.3.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

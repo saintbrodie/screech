@@ -1,8 +1,10 @@
 [
   {
-    "name": "hawk_arrival_example",
+    "name": "one_hawk_resting_example",
     "url": "https://www.youtube.com/watch?v=REPLACE_WITH_GDIT_VIDEO_ID",
     "start": 120.0,
-    "end": 150.0
+    "end": 150.0,
+    "expected_count": 1,
+    "notes": "Use expected_count only for clips where the count should remain stable for the whole excerpt."
   }
 ]

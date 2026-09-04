@@ -11,11 +11,23 @@ from yt_dlp import YoutubeDL
 DEFAULT_CHANNEL = "https://www.youtube.com/@GDIT-HawkCam"
 
 
+def canonical_watch_url(item: dict[str, Any]) -> str | None:
+    video_id = item.get("id")
+    if video_id:
+        return f"https://www.youtube.com/watch?v={video_id}"
+
+    for key in ("webpage_url", "url"):
+        value = item.get(key)
+        if isinstance(value, str) and value.startswith(("http://", "https://")):
+            return value
+    return None
+
+
 def discover(channel_url: str, limit: int) -> list[dict[str, Any]]:
     options = {
         "quiet": True,
         "no_warnings": True,
-        "extract_flat": True,
+        "extract_flat": "in_playlist",
         "playlistend": limit,
     }
     with YoutubeDL(options) as ydl:
@@ -27,8 +39,10 @@ def discover(channel_url: str, limit: int) -> list[dict[str, Any]]:
             {
                 "id": item.get("id"),
                 "title": item.get("title"),
-                "url": item.get("url") or item.get("webpage_url"),
+                "url": canonical_watch_url(item),
                 "duration": item.get("duration"),
+                "upload_date": item.get("upload_date"),
+                "timestamp": item.get("timestamp"),
             }
         )
     return entries

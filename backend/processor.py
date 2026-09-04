@@ -6,11 +6,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import cv2
 from yt_dlp import YoutubeDL
 
-from .config import Settings
+from .config import PROJECT_ROOT, Settings
 from .database import Database
 from .detector import DetectionSummary, HawkDetector
 from .state import NestStateMachine
@@ -111,17 +112,46 @@ class HawkProcessor:
     def request_stop(self) -> None:
         self.stop_event.set()
 
+    @staticmethod
+    def _is_network_source(source: str) -> bool:
+        scheme = urlparse(source).scheme.lower()
+        return scheme in {"http", "https", "rtsp", "rtmp", "udp", "tcp"}
+
+    def _local_source_path(self) -> Path | None:
+        source = self.settings.video_source.strip()
+        if not source or self._is_network_source(source):
+            return None
+
+        candidate = Path(source).expanduser()
+        if candidate.is_absolute():
+            return candidate.resolve() if candidate.exists() else None
+
+        cwd_candidate = (Path.cwd() / candidate).resolve()
+        if cwd_candidate.exists():
+            return cwd_candidate
+
+        repo_candidate = (PROJECT_ROOT / candidate).resolve()
+        if repo_candidate.exists():
+            return repo_candidate
+        return None
+
     def _source_is_local_file(self) -> bool:
-        if not self.settings.video_source:
-            return False
-        return Path(self.settings.video_source).expanduser().exists()
+        return self._local_source_path() is not None
 
     async def _resolved_source(self) -> str:
         if self.settings.video_source:
-            source = self.settings.video_source
+            source = self.settings.video_source.strip()
+            local_path = self._local_source_path()
+            if local_path is not None:
+                return str(local_path)
             if source.startswith(("https://www.youtube.com/", "https://youtu.be/")):
                 return await asyncio.to_thread(resolve_youtube_stream, source)
-            return source
+            if self._is_network_source(source):
+                return source
+            raise FileNotFoundError(
+                f"Configured local video source was not found: {source!r}. "
+                f"Relative paths are checked from the current directory and {PROJECT_ROOT}."
+            )
         return await asyncio.to_thread(resolve_youtube_stream, self.settings.youtube_watch_url)
 
     async def _open_capture(self) -> None:
@@ -135,6 +165,7 @@ class HawkProcessor:
                 raise RuntimeError("Local fixture could not be opened")
             self.file_capture = capture
             self.state["stream_health"] = "Fixture"
+            self.state["source_mode"] = "fixture"
         else:
             self.live_capture = await asyncio.to_thread(LatestFrameCapture, source)
             deadline = time.monotonic() + 15
