@@ -179,6 +179,7 @@ class HawkProcessor:
                     raise RuntimeError("Timed out waiting for the first live frame")
                 await asyncio.sleep(0.1)
             self.state["stream_health"] = "Live"
+            self.state["source_mode"] = "stream"
 
         self.state["status"] = self.machine.stable_status or "Analyzing video feed..."
 
@@ -269,19 +270,20 @@ class HawkProcessor:
             self.state["status"] = transition.status
             self.state["hawk_count"] = transition.hawk_count
 
-            if self.database.last_event_text() != transition.status:
-                self.database.log_event(
-                    event_type=transition.event_type,
-                    text=transition.status,
-                    hawk_count=transition.hawk_count,
-                    confidence=summary.confidence,
-                    snapshot_path=snapshot_path,
-                )
+            await asyncio.to_thread(
+                self.database.log_event,
+                event_type=transition.event_type,
+                text=transition.status,
+                hawk_count=summary.hawk_count,
+                confidence=summary.confidence,
+                snapshot_path=snapshot_path,
+            )
         elif self.machine.stable_status:
             self.state["status"] = self.machine.stable_status
 
         if now - self.last_observation_at >= self.settings.observation_interval_seconds:
-            self.database.log_observation(
+            await asyncio.to_thread(
+                self.database.log_observation,
                 hawk_count=summary.hawk_count,
                 behavior=summary.behavior,
                 confidence=summary.confidence,
@@ -318,8 +320,10 @@ class HawkProcessor:
             if self.state["last_frame_at"]
             else None
         )
+        source_ok = self.state["stream_health"] in {"Live", "Fixture"}
         return {
             "model_loaded": self.model_loaded,
+            "source_ok": source_ok,
             "stream_health": self.state["stream_health"],
             "frame_age_seconds": frame_age,
             "source_mode": self.state["source_mode"],

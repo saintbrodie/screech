@@ -26,10 +26,12 @@
             <div class="main-content">
                 <section class="video-section panel glass">
                     <div class="video-wrapper">
-                        <iframe id="live-player" src="https://www.youtube.com/embed/HRhToy9dA-Q?autoplay=1&mute=1"
-                            title="Hawk Cam Live" frameborder="0"
+                        <iframe id="live-player" title="Hawk Cam Live" frameborder="0"
                             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                            allowfullscreen></iframe>
+                            allowfullscreen hidden></iframe>
+                        <div id="video-placeholder" class="video-placeholder">
+                            Resolving configured video source...
+                        </div>
                     </div>
                     <div class="status-bar">
                         <span class="pulse-dot"></span>

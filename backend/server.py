@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +24,39 @@ weather_service = WeatherService(
     settings.weather_ttl_seconds,
 )
 fact_service = FactService(settings.fact_ttl_seconds)
+
+
+def configured_youtube_video_id() -> str | None:
+    source = settings.video_source.strip()
+    if not source:
+        return settings.video_id
+
+    parsed = urlparse(source)
+    host = parsed.netloc.lower().split(":", 1)[0]
+
+    if host in {"youtu.be", "www.youtu.be"}:
+        return parsed.path.strip("/").split("/", 1)[0] or None
+
+    if host.endswith("youtube.com"):
+        query_id = parse_qs(parsed.query).get("v", [None])[0]
+        if query_id:
+            return query_id
+
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) >= 2 and parts[0] in {"embed", "shorts", "live"}:
+            return parts[1]
+
+    return None
+
+
+def video_metadata() -> dict[str, str | None]:
+    video_id = configured_youtube_video_id()
+    embed_url = (
+        f"https://www.youtube.com/embed/{video_id}?autoplay=1&mute=1"
+        if video_id
+        else None
+    )
+    return {"video_id": video_id, "embed_url": embed_url}
 
 
 @asynccontextmanager
@@ -53,7 +87,7 @@ if settings.allowed_origins:
 
 @app.get("/api/status")
 async def get_status():
-    return processor.state
+    return dict(processor.state)
 
 
 @app.get("/api/weather")
@@ -81,7 +115,11 @@ async def get_stats(days: int = Query(default=settings.stats_days, ge=1, le=90))
 async def get_health():
     db_health = await asyncio.to_thread(database.health)
     processor_health = processor.health()
-    ok = db_health["ok"] and processor_health["model_loaded"]
+    ok = (
+        db_health["ok"]
+        and processor_health["model_loaded"]
+        and processor_health["source_ok"]
+    )
     return {
         "ok": ok,
         "processor": processor_health,
@@ -97,12 +135,13 @@ async def get_bulk_data():
         asyncio.to_thread(database.daily_stats, settings.stats_days),
     )
     return {
-        "status": processor.state,
+        "status": dict(processor.state),
         "timeline": timeline,
         "fact": fact_service.get(),
         "weather": weather,
         "stats": stats,
         "health": processor.health(),
+        "video": video_metadata(),
     }
 
 

@@ -26,18 +26,20 @@ FACTS = [
     "The oldest known wild Red-shouldered Hawk lived to be at least 25 years and 10 months old.",
 ]
 
+_UNSET = object()
+
 
 class TTLValue:
     def __init__(self, ttl_seconds: int) -> None:
         self.ttl_seconds = max(1, ttl_seconds)
-        self.value: Any = None
+        self.value: Any = _UNSET
         self.expires_at = 0.0
         self.lock = threading.Lock()
 
     def get_or_update(self, loader):
         now = time.monotonic()
         with self.lock:
-            if self.value is not None and now < self.expires_at:
+            if self.value is not _UNSET and now < self.expires_at:
                 return self.value
             value = loader()
             self.value = value

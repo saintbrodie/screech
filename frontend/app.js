@@ -1,7 +1,12 @@
 let lastStatus = "";
+
+function notificationsAvailable() {
+    return "Notification" in window && window.isSecureContext;
+}
+
 let notificationsEnabled =
     localStorage.getItem("screech-notifications") === "on" &&
-    "Notification" in window &&
+    notificationsAvailable() &&
     Notification.permission === "granted";
 
 const notifyButton = document.getElementById("notify-btn");
@@ -12,11 +17,17 @@ function renderNotifyState() {
         notifyButton.disabled = true;
         return;
     }
+    if (!window.isSecureContext) {
+        notifyButton.innerText = "Alerts [HTTPS]";
+        notifyButton.disabled = true;
+        notifyButton.title = "Browser notifications require HTTPS or localhost.";
+        return;
+    }
     notifyButton.innerText = notificationsEnabled ? "Alerts [ON]" : "Alerts [OFF]";
 }
 
 notifyButton.addEventListener("click", async () => {
-    if (!("Notification" in window)) return;
+    if (!notificationsAvailable()) return;
 
     if (notificationsEnabled) {
         notificationsEnabled = false;
@@ -87,6 +98,27 @@ const weatherEmojis = {
 function formatConfidence(value) {
     if (value === null || value === undefined) return "--";
     return `${Math.round(value * 100)}%`;
+}
+
+function renderVideo(video) {
+    const iframe = document.getElementById("live-player");
+    const placeholder = document.getElementById("video-placeholder");
+    const embedUrl = video?.embed_url || null;
+
+    if (embedUrl) {
+        if (iframe.getAttribute("src") !== embedUrl) {
+            iframe.setAttribute("src", embedUrl);
+        }
+        iframe.hidden = false;
+        placeholder.hidden = true;
+        return;
+    }
+
+    iframe.hidden = true;
+    iframe.removeAttribute("src");
+    placeholder.hidden = false;
+    placeholder.textContent =
+        "Fixture / non-embeddable source mode // AI analysis remains active";
 }
 
 function appendTimelineEvent(list, item) {
@@ -175,6 +207,8 @@ async function fetchAll() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
+        renderVideo(data.video);
+
         const status = data.status;
         document.getElementById("ai-text").innerText = status.status;
         document.getElementById("ai-count").innerText = status.hawk_count;
@@ -193,6 +227,7 @@ async function fetchAll() {
             lastStatus !== "" &&
             lastStatus !== status.status &&
             notificationsEnabled &&
+            notificationsAvailable() &&
             Notification.permission === "granted"
         ) {
             new Notification("S.C.R.E.E.C.H. Nest Update", { body: status.status });

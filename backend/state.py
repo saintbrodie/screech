@@ -22,12 +22,7 @@ class StableTransition:
 
 
 class NestStateMachine:
-    """Debounce noisy detector output into a stable nest state.
-
-    The generic detector knows that it saw COCO-class birds. It does not know that
-    two simultaneous boxes are definitely Freya and Finn, so multi-bird states are
-    intentionally identity-neutral.
-    """
+    """Debounce noisy detector output into a stable nest state."""
 
     def __init__(self, empty_confirmations: int = 8, state_confirmations: int = 3) -> None:
         self.empty_confirmations = max(1, empty_confirmations)
@@ -54,16 +49,45 @@ class NestStateMachine:
         return STATE_UNKNOWN_HAWK
 
     @staticmethod
-    def describe(state_code: int) -> tuple[str, int, str]:
+    def describe(state_code: int) -> tuple[str, int]:
         if state_code == STATE_EMPTY:
-            return "Nest appears empty", 0, "departure"
+            return "Nest appears empty", 0
         if state_code == STATE_FREYA:
-            return "Freya (Female) is in the nest!", 1, "arrival"
+            return "Freya (Female) is in the nest!", 1
         if state_code == STATE_FINN:
-            return "Finn (Male) is in the nest!", 1, "arrival"
+            return "Finn (Male) is in the nest!", 1
         if state_code == STATE_MULTIPLE:
-            return "Multiple birds are in the nest", 2, "multiple_present"
-        return "A hawk is in the nest (identity uncertain)", 1, "arrival_unknown"
+            return "Multiple birds are in the nest", 2
+        return "A hawk is in the nest (identity uncertain)", 1
+
+    @classmethod
+    def event_type_for(cls, previous: int | None, current: int) -> str:
+        if previous is None:
+            return "initial_state"
+
+        _, previous_count = cls.describe(previous)
+        _, current_count = cls.describe(current)
+
+        if previous_count == 0 and current_count > 0:
+            return "arrival"
+        if previous_count > 0 and current_count == 0:
+            return "departure"
+        if previous_count < 2 and current_count >= 2:
+            return "multiple_present"
+        if previous_count >= 2 and current_count == 1:
+            return "one_remaining"
+        if previous_count == current_count == 1 and previous != current:
+            return "identity_change"
+        return "state_change"
+
+    def _transition(self, previous: int | None, current: int) -> StableTransition:
+        status, count = self.describe(current)
+        return StableTransition(
+            state_code=current,
+            status=status,
+            hawk_count=count,
+            event_type=self.event_type_for(previous, current),
+        )
 
     def update(self, hawk_count: int, identity: str = "unknown") -> StableTransition | None:
         candidate = self._candidate(hawk_count, identity)
@@ -71,11 +95,11 @@ class NestStateMachine:
             return None
 
         if self.stable_state is None:
+            previous = self.stable_state
             self.stable_state = candidate
             self.pending_state = None
             self.pending_count = 0
-            status, count, event_type = self.describe(candidate)
-            return StableTransition(candidate, status, count, event_type)
+            return self._transition(previous, candidate)
 
         if candidate == self.stable_state:
             self.pending_state = None
@@ -91,11 +115,11 @@ class NestStateMachine:
         if self.pending_count < self.state_confirmations:
             return None
 
+        previous = self.stable_state
         self.stable_state = candidate
         self.pending_state = None
         self.pending_count = 0
-        status, count, event_type = self.describe(candidate)
-        return StableTransition(candidate, status, count, event_type)
+        return self._transition(previous, candidate)
 
     @property
     def stable_status(self) -> str | None:

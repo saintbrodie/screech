@@ -42,6 +42,8 @@ tests/fixtures/clips/
 tests/fixtures/annotated/
 tests/fixtures/discovered.json
 tests/fixtures/results.json
+tests/fixtures/benchmark-results.json
+tests/fixtures/clip-behavior-results.json
 tests/fixtures/clips.json
 
 # Environment variables
