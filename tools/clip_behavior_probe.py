@@ -80,6 +80,7 @@ def main() -> None:
         pretrained=args.pretrained,
         device=device,
     )
+    model.eval()
     tokenizer = open_clip.get_tokenizer(args.model)
 
     with torch.no_grad():
