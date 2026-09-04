@@ -107,10 +107,16 @@ class HawkProcessor:
             "identity": "unknown",
             "model": settings.model_path,
             "source_mode": "configured" if settings.video_source else "youtube_live",
+            "last_error": None,
+            "last_error_at": None,
         }
 
     def request_stop(self) -> None:
         self.stop_event.set()
+
+    def _record_error(self, category: str, exc: Exception) -> None:
+        self.state["last_error"] = f"{category}: {exc}"
+        self.state["last_error_at"] = time.time()
 
     @staticmethod
     def _is_network_source(source: str) -> bool:
@@ -266,29 +272,45 @@ class HawkProcessor:
 
         transition = self.machine.update(summary.hawk_count, summary.identity)
         if transition is not None:
-            snapshot_path = await self._save_transition_media(frame, summary)
             self.state["status"] = transition.status
             self.state["hawk_count"] = transition.hawk_count
 
-            await asyncio.to_thread(
-                self.database.log_event,
-                event_type=transition.event_type,
-                text=transition.status,
-                hawk_count=summary.hawk_count,
-                confidence=summary.confidence,
-                snapshot_path=snapshot_path,
-            )
+            snapshot_path = None
+            try:
+                snapshot_path = await self._save_transition_media(frame, summary)
+            except Exception as exc:
+                self._record_error("Media write error", exc)
+
+            try:
+                await asyncio.to_thread(
+                    self.database.log_event,
+                    event_type=transition.event_type,
+                    text=transition.status,
+                    hawk_count=summary.hawk_count,
+                    confidence=summary.confidence,
+                    snapshot_path=snapshot_path,
+                )
+            except Exception as exc:
+                self._record_error("Database event error", exc)
         elif self.machine.stable_status:
             self.state["status"] = self.machine.stable_status
 
         if now - self.last_observation_at >= self.settings.observation_interval_seconds:
-            await asyncio.to_thread(
-                self.database.log_observation,
-                hawk_count=summary.hawk_count,
-                behavior=summary.behavior,
-                confidence=summary.confidence,
-            )
             self.last_observation_at = now
+            try:
+                stable_count = (
+                    int(self.state["hawk_count"])
+                    if self.machine.stable_state is not None
+                    else summary.hawk_count
+                )
+                await asyncio.to_thread(
+                    self.database.log_observation,
+                    hawk_count=stable_count,
+                    behavior=summary.behavior,
+                    confidence=summary.confidence,
+                )
+            except Exception as exc:
+                self._record_error("Database observation error", exc)
 
     async def run(self) -> None:
         self.started_at = time.time()
@@ -299,6 +321,7 @@ class HawkProcessor:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self._record_error("Model load error", exc)
                 self.state["stream_health"] = "Offline"
                 self.state["status"] = f"Model error: {exc}"
                 self.state["raw_status"] = "AI model unavailable"
@@ -310,15 +333,25 @@ class HawkProcessor:
             while not self.stop_event.is_set():
                 try:
                     frame = await self._read_frame()
-                    await self._process_frame(frame)
-                    await asyncio.sleep(self.settings.scan_interval_seconds)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    self._record_error("Source error", exc)
                     self.state["stream_health"] = "Offline"
                     self.state["status"] = f"Source error: {exc}"
                     await self._release_capture()
                     await asyncio.sleep(self.settings.stream_retry_seconds)
+                    continue
+
+                try:
+                    await self._process_frame(frame)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._record_error("Processing error", exc)
+                    self.state["status"] = f"Processing error: {exc}"
+
+                await asyncio.sleep(self.settings.scan_interval_seconds)
         finally:
             await self._release_capture()
 
@@ -337,5 +370,7 @@ class HawkProcessor:
             "frame_age_seconds": frame_age,
             "source_mode": self.state["source_mode"],
             "model": self.settings.model_path,
+            "last_error": self.state["last_error"],
+            "last_error_at": self.state["last_error_at"],
             "uptime_seconds": round(now - self.started_at, 1) if self.started_at else 0,
         }
