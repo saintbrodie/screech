@@ -1,16 +1,20 @@
 @echo off
+setlocal
+cd /d "%~dp0"
+
 echo =======================================================
-echo Starting S.C.R.E.E.C.H. Backend Server...
+echo Starting S.C.R.E.E.C.H.
 echo =======================================================
 
-cd "%~dp0backend"
-IF EXIST "venv\Scripts\python.exe" (
-    echo [INFO] Using virtual environment...
-    venv\Scripts\python.exe -m uvicorn server:app --reload --host 0.0.0.0 --port 8000
-) ELSE (
-    echo [WARNING] No virtual environment found at venv\Scripts\python.exe
-    echo Attempting to run with system python...
-    python -m uvicorn server:app --reload --host 0.0.0.0 --port 8000
+if exist ".venv\Scripts\python.exe" (
+    echo [INFO] Using .venv
+    ".venv\Scripts\python.exe" -m uvicorn backend.server:app --host 0.0.0.0 --port 8000
+) else if exist "venv\Scripts\python.exe" (
+    echo [INFO] Using venv
+    "venv\Scripts\python.exe" -m uvicorn backend.server:app --host 0.0.0.0 --port 8000
+) else (
+    echo [WARNING] No project virtual environment found; using system Python.
+    python -m uvicorn backend.server:app --host 0.0.0.0 --port 8000
 )
 
 pause
