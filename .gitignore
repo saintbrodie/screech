@@ -1,12 +1,13 @@
 # Python
-venv/
 .venv/
+venv/
+env/
+ENV/
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
 build/
 develop-eggs/
 dist/
@@ -24,26 +25,36 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+.pytest_cache/
 
-# YOLOv8 weights
+# Model weights
 *.pt
 
-# Node.js
+# Runtime data
+backend/hawk_data.db
+backend/hawk_data.db-shm
+backend/hawk_data.db-wal
+backend/snapshots/
+backend/crops/
+
+# Regression fixtures (source metadata example stays tracked)
+tests/fixtures/clips/
+tests/fixtures/annotated/
+tests/fixtures/discovered.json
+tests/fixtures/results.json
+tests/fixtures/benchmark-results.json
+tests/fixtures/clip-behavior-results.json
+tests/fixtures/clips.json
+
+# Environment variables
+.env
+
+# Node / editor / OS noise
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
-# Environment variables
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# OS specific
 .DS_Store
 Thumbs.db
-backend/hawk_data.db
+.vscode/
+.idea/

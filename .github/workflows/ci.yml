@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  lightweight-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Validate uv dependency resolution
+        run: |
+          python -m pip install uv
+          uv lock
+
+      - name: Compile Python sources
+        run: python -m compileall backend tools tests
+
+      - name: Install lightweight test dependencies
+        run: python -m pip install "pytest>=8,<10" "requests==2.34.2"
+
+      - name: Run unit tests
+        run: pytest -q
