@@ -3,7 +3,7 @@ name = "screech-hawkcam"
 version = "2.0.0"
 description = "Local AI-assisted activity tracker for the GDIT Red-shouldered Hawk cam"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.141.1",
     "uvicorn[standard]==0.52.4",
@@ -11,7 +11,7 @@ dependencies = [
     "yt-dlp[default]==2026.8.19",
     "ultralytics==8.4.138",
     "requests==2.34.2",
-    "numpy>=2.0,<3",
+    "numpy>=2.3.5,<3",
 ]
 
 [project.optional-dependencies]
