@@ -4,4 +4,4 @@ opencv-python==4.14.0.94
 yt-dlp[default]==2026.8.19
 ultralytics==8.4.138
 requests==2.34.2
-numpy>=2.3.5,<3
+numpy==2.3.5
