@@ -2,6 +2,8 @@
 
 The discovered GDIT Hawk Cam archive contains many multi-hour livestreams with generic titles. Do not hand-label random timestamps blindly. Screech includes a bounded triage workflow that samples the archive, runs the current detector as a search aid, and produces annotated previews for human review.
 
+The current 20-entry discovered archive totals about 74 hours. The default triage pass reduces that to 40 clips / 400 seconds while still sampling every stream twice.
+
 ## 1. Discover streams
 
 ```powershell
