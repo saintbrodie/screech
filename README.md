@@ -112,7 +112,7 @@ This writes `tests/fixtures/discovered.json` with canonical YouTube watch URLs.
 
 ### Triage long archived streams
 
-If the discovered streams are long and generically titled, do not scrub them manually first. Build a bounded sampling manifest:
+If the discovered streams are long and generically titled, do not scrub them manually first. The current 20-entry archive is about 74 hours total, so Screech builds a bounded sampling manifest instead:
 
 ```powershell
 uv run python tools\fetch_test_clips.py triage
