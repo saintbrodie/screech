@@ -65,7 +65,7 @@ Candidate categories are heuristics for review:
 - `empty_candidate` — 10% or fewer sampled frames had a detection
 - `unreadable` — local clip could not be opened
 
-The report includes source video URL and source timestamps so useful clips can be promoted into the permanent labeled regression manifest.
+The report includes source video URL and source timestamps so useful clips can be promoted into the permanent labeled regression manifest. For collaborative review, share `triage-results.json` first; only the previews for ambiguous/high-value candidates need to be shared afterward.
 
 ## 5. Human-label useful clips
 
