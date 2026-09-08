@@ -24,7 +24,7 @@ S.C.R.E.E.C.H. is a local, cyberpunk-themed AI dashboard for tracking activity f
 
 ## Requirements
 
-- Python **3.10+**
+- Python **3.12+**
 - A supported PyTorch environment for your machine (installed by Ultralytics in the normal pip/uv path)
 - Internet access during first model load so Ultralytics can fetch the configured model if it is not already cached
 - Internet access to YouTube during live operation
@@ -79,8 +79,9 @@ Important settings:
 | --- | --- | --- |
 | `SCREECH_VIDEO_ID` | `HRhToy9dA-Q` | Live YouTube video ID |
 | `SCREECH_VIDEO_SOURCE` | empty | Override with a local file, direct stream URL, or YouTube URL |
-| `SCREECH_MODEL` | `yolo26n.pt` | Ultralytics model |
+| `SCREECH_MODEL` | `yolo11n.pt` | Ultralytics model selected from archived Hawk Cam smoke testing |
 | `SCREECH_DETECTOR_CONFIDENCE` | `0.08` | Generic bird detector confidence |
+| `SCREECH_DETECTOR_NMS_IOU` | `0.50` | IoU threshold for explicit NMS during prediction |
 | `SCREECH_MIN_BOX_AREA_RATIO` | `0.005` | Ignore tiny bird boxes |
 | `SCREECH_IDENTITY_MODE` | `size` | `size` or `generic` |
 | `SCREECH_FEMALE_AREA_RATIO` | `0.08` | Center of the experimental size heuristic |
@@ -140,17 +141,19 @@ uv run python tools\analyze_clip.py tests\fixtures\clips\hawk_arrival.mp4
 
 That writes JSON detections plus annotated sampled frames.
 
-### Compare YOLO26 against YOLOv8
+### Compare detector candidates
 
-Once the fixture set exists, run both detectors over the exact same frames:
+Once the fixture set exists, run the detector candidates over the exact same frames:
 
 ```powershell
 uv run python tools\benchmark_models.py
 ```
 
-The default comparison is `yolo26n.pt` vs `yolov8n.pt`. It reports detection rate, exact-count accuracy where `expected_count` labels exist, mean confidence, count histograms, and mean inference time. Results are written to `tests/fixtures/benchmark-results.json`.
+The default comparison is `yolo11n.pt`, `yolo26n.pt`, and `yolov8n.pt`. It reports detection rate, exact-count accuracy where `expected_count` labels exist, mean confidence, count histograms, and mean/median inference time. Results are written to `tests/fixtures/benchmark-results.json`.
 
-You can add other candidates without changing code:
+An initial 30-second public GDIT Hawk Cam smoke clip favored YOLO11n as the production default: it maintained similar detection coverage and latency to YOLO26n while avoiding repeated overlapping multi-bird detections seen from YOLO26n. Treat that as a provisional selection, not final accuracy evidence, because the smoke clip is not ground-truth labeled. Keep benchmarking against labeled archived fixtures as the regression set grows.
+
+You can override the candidates without changing code:
 
 ```powershell
 uv run python tools\benchmark_models.py --models yolo26n.pt yolo11n.pt yolov8n.pt
