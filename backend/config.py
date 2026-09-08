@@ -31,7 +31,7 @@ def _env_bool(name: str, default: bool) -> bool:
 class Settings:
     video_id: str = os.getenv("SCREECH_VIDEO_ID", "HRhToy9dA-Q")
     video_source: str = os.getenv("SCREECH_VIDEO_SOURCE", "")
-    model_path: str = os.getenv("SCREECH_MODEL", "yolo26n.pt")
+    model_path: str = os.getenv("SCREECH_MODEL", "yolo11n.pt")
 
     detector_confidence: float = _env_float("SCREECH_DETECTOR_CONFIDENCE", 0.08)
     detector_nms_iou: float = _env_float("SCREECH_DETECTOR_NMS_IOU", 0.50)
