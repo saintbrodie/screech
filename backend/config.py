@@ -34,6 +34,7 @@ class Settings:
     model_path: str = os.getenv("SCREECH_MODEL", "yolo26n.pt")
 
     detector_confidence: float = _env_float("SCREECH_DETECTOR_CONFIDENCE", 0.08)
+    detector_nms_iou: float = _env_float("SCREECH_DETECTOR_NMS_IOU", 0.50)
     min_box_area_ratio: float = _env_float("SCREECH_MIN_BOX_AREA_RATIO", 0.005)
     female_area_ratio: float = _env_float("SCREECH_FEMALE_AREA_RATIO", 0.08)
     identity_deadband: float = _env_float("SCREECH_IDENTITY_DEADBAND", 0.01)
