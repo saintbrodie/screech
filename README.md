@@ -20,7 +20,7 @@ S.C.R.E.E.C.H. is a local, cyberpunk-themed AI dashboard for tracking activity f
 - **Cached Open-Meteo weather** so open dashboards do not make a weather request every five seconds.
 - **Browser notifications** for stable state changes.
 - **Health endpoint** for model, source, frame age, and database status.
-- **Offseason regression tooling** for discovering GDIT Hawk Cam uploads, downloading timestamped local clips, comparing detector models, and probing multimodal behavior classification.
+- **Offseason regression tooling** for discovering GDIT Hawk Cam uploads, downloading timestamped local clips, triaging long archived streams, comparing detector models, and probing multimodal behavior classification.
 
 ## Requirements
 
@@ -108,7 +108,35 @@ Discover recent uploads:
 uv run python tools\fetch_test_clips.py discover
 ```
 
-This writes `tests/fixtures/discovered.json` with canonical YouTube watch URLs. Review the videos and choose timestamp ranges that cover useful cases:
+This writes `tests/fixtures/discovered.json` with canonical YouTube watch URLs.
+
+### Triage long archived streams
+
+If the discovered streams are long and generically titled, do not scrub them manually first. Build a bounded sampling manifest:
+
+```powershell
+uv run python tools\fetch_test_clips.py triage
+```
+
+The default takes two evenly spaced 10-second windows from every discovered stream. With 20 streams that is 40 clips / 400 seconds total.
+
+Download those windows:
+
+```powershell
+uv run python tools\fetch_test_clips.py fetch --manifest tests\fixtures\triage.json --output-dir tests\fixtures\triage
+```
+
+Then use the current detector as a search aid:
+
+```powershell
+uv run python tools\triage_archive.py
+```
+
+This writes a ranked `tests/fixtures/triage-results.json` plus one representative annotated preview per clip in `tests/fixtures/triage-previews/`. Candidate categories help find possible multi-bird scenes, persistent one-bird footage, activity, empty nest footage, and transition/hard cases. They are triage hints only; visually inspect clips before assigning ground-truth labels.
+
+See `TRIAGE.md` for the full workflow and tuning options.
+
+For the permanent regression set, choose timestamp ranges that cover useful cases:
 
 - empty nest
 - one hawk resting
@@ -246,6 +274,7 @@ tools/
   fetch_test_clips.py
   analyze_clip.py
   benchmark_models.py
+  triage_archive.py
   clip_behavior_probe.py
 tests/
   test_state.py
