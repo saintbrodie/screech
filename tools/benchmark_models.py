@@ -149,7 +149,7 @@ def main() -> None:
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["yolo26n.pt", "yolov8n.pt"],
+        default=["yolo11n.pt", "yolo26n.pt", "yolov8n.pt"],
     )
     parser.add_argument("--sample-seconds", type=float, default=1.0)
     parser.add_argument(
