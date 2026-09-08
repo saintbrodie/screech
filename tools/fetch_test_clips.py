@@ -14,6 +14,26 @@ DEFAULT_CHANNEL = "https://www.youtube.com/@GDIT-HawkCam"
 DEFAULT_TABS = ("videos", "streams")
 
 
+def _missing_tab_message(message: str) -> bool:
+    lowered = message.lower()
+    return "this channel does not have a" in lowered and "tab" in lowered
+
+
+class DiscoveryLogger:
+    """Keep expected missing-tab errors from looking like discovery failures."""
+
+    def debug(self, message: str) -> None:
+        pass
+
+    def warning(self, message: str) -> None:
+        print(f"yt-dlp warning: {message}", file=sys.stderr)
+
+    def error(self, message: str) -> None:
+        if _missing_tab_message(message):
+            return
+        print(f"yt-dlp error: {message}", file=sys.stderr)
+
+
 def canonical_watch_url(item: dict[str, Any]) -> str | None:
     video_id = item.get("id")
     if video_id:
@@ -37,6 +57,7 @@ def discover(
         "no_warnings": True,
         "extract_flat": "in_playlist",
         "playlistend": limit_per_tab,
+        "logger": DiscoveryLogger(),
     }
 
     entries: list[dict[str, Any]] = []
@@ -48,7 +69,10 @@ def discover(
             try:
                 info = ydl.extract_info(tab_url, download=False)
             except DownloadError as exc:
-                print(f"Warning: could not inspect {tab_url}: {exc}", file=sys.stderr)
+                if _missing_tab_message(str(exc)):
+                    print(f"Skipping unavailable channel tab: {tab}", file=sys.stderr)
+                else:
+                    print(f"Warning: could not inspect {tab_url}: {exc}", file=sys.stderr)
                 continue
 
             for item in info.get("entries") or []:
