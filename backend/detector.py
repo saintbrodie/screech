@@ -57,6 +57,8 @@ class HawkDetector:
             frame,
             classes=[14],
             conf=self.settings.detector_confidence,
+            iou=self.settings.detector_nms_iou,
+            nms=True,
             verbose=False,
         )
         boxes = results[0].boxes
@@ -146,7 +148,13 @@ class HawkDetector:
         if not cv2.imwrite(str(path), frame):
             raise RuntimeError(f"Could not write image to {path}")
 
-    def save_crops(self, base_name: str, frame: np.ndarray, summary: DetectionSummary, directory: Path) -> list[Path]:
+    def save_crops(
+        self,
+        base_name: str,
+        frame: np.ndarray,
+        summary: DetectionSummary,
+        directory: Path,
+    ) -> list[Path]:
         saved: list[Path] = []
         height, width = frame.shape[:2]
         for index, detection in enumerate(summary.detections, start=1):
