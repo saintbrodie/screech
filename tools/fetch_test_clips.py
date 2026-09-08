@@ -159,9 +159,22 @@ def build_triage_manifest(
     return manifest
 
 
-def download_manifest(manifest_path: Path, output_dir: Path) -> None:
+def _completed_output(output_dir: Path, name: str) -> Path | None:
+    for path in output_dir.glob(f"{name}.*"):
+        if path.is_file() and not path.name.endswith((".part", ".ytdl")):
+            return path
+    return None
+
+
+def download_manifest(
+    manifest_path: Path,
+    output_dir: Path,
+    continue_on_error: bool = False,
+    skip_existing: bool = True,
+) -> None:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     output_dir.mkdir(parents=True, exist_ok=True)
+    failures: list[str] = []
 
     for clip in manifest:
         if clip.get("enabled", True) is False:
@@ -175,6 +188,12 @@ def download_manifest(manifest_path: Path, output_dir: Path) -> None:
         if end <= start:
             raise ValueError(f"{name}: end must be after start")
 
+        if skip_existing:
+            existing = _completed_output(output_dir, name)
+            if existing is not None:
+                print(f"Skipping existing clip: {existing}")
+                continue
+
         # yt-dlp's CLI calls this feature --download-sections, but the Python
         # API consumes a callable in the `download_ranges` option.
         options = {
@@ -186,8 +205,20 @@ def download_manifest(manifest_path: Path, output_dir: Path) -> None:
             "force_keyframes_at_cuts": True,
             "outtmpl": str(output_dir / f"{name}.%(ext)s"),
         }
-        with YoutubeDL(options) as ydl:
-            ydl.download([url])
+        try:
+            with YoutubeDL(options) as ydl:
+                ydl.download([url])
+        except DownloadError as exc:
+            if not continue_on_error:
+                raise
+            failures.append(name)
+            print(f"Warning: failed to download {name}: {exc}", file=sys.stderr)
+
+    if failures:
+        print(
+            f"Completed with {len(failures)} failed clip(s): {', '.join(failures)}",
+            file=sys.stderr,
+        )
 
 
 def main() -> None:
@@ -242,6 +273,16 @@ def main() -> None:
         type=Path,
         default=Path("tests/fixtures/clips"),
     )
+    fetch_parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Continue downloading remaining manifest entries if one clip fails.",
+    )
+    fetch_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-download clips even when a completed output with the same name exists.",
+    )
 
     args = parser.parse_args()
 
@@ -268,7 +309,12 @@ def main() -> None:
         )
         return
 
-    download_manifest(args.manifest, args.output_dir)
+    download_manifest(
+        args.manifest,
+        args.output_dir,
+        continue_on_error=args.continue_on_error,
+        skip_existing=not args.overwrite,
+    )
 
 
 if __name__ == "__main__":
