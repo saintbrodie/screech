@@ -40,7 +40,11 @@ backend/crops/
 # Regression fixtures (source metadata example stays tracked)
 tests/fixtures/clips/
 tests/fixtures/annotated/
+tests/fixtures/triage/
+tests/fixtures/triage-previews/
 tests/fixtures/discovered.json
+tests/fixtures/triage.json
+tests/fixtures/triage-results.json
 tests/fixtures/results.json
 tests/fixtures/benchmark-results.json
 tests/fixtures/clip-behavior-results.json
