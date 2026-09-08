@@ -97,6 +97,68 @@ def discover(
     return entries
 
 
+def build_triage_manifest(
+    entries: list[dict[str, Any]],
+    clip_seconds: float = 10.0,
+    samples_per_stream: int = 2,
+) -> list[dict[str, Any]]:
+    """Create evenly spaced short windows for quickly triaging an archive."""
+    if clip_seconds <= 0:
+        raise ValueError("clip_seconds must be positive")
+    if samples_per_stream < 1:
+        raise ValueError("samples_per_stream must be at least 1")
+
+    manifest: list[dict[str, Any]] = []
+    fractions = [
+        (index + 1) / (samples_per_stream + 1)
+        for index in range(samples_per_stream)
+    ]
+
+    for source_index, item in enumerate(entries, start=1):
+        url = item.get("url")
+        video_id = str(item.get("id") or f"source{source_index:02d}")
+        duration_value = item.get("duration")
+        try:
+            duration = float(duration_value)
+        except (TypeError, ValueError):
+            continue
+        if not url or duration <= 0:
+            continue
+
+        effective_clip = min(clip_seconds, duration)
+        if duration <= effective_clip:
+            starts = [0.0]
+        else:
+            starts = []
+            for fraction in fractions:
+                center = duration * fraction
+                start = center - effective_clip / 2.0
+                start = max(0.0, min(duration - effective_clip, start))
+                rounded = round(start, 3)
+                if rounded not in starts:
+                    starts.append(rounded)
+
+        for sample_index, start in enumerate(starts, start=1):
+            end = min(duration, start + effective_clip)
+            safe_id = "".join(char if char.isalnum() else "_" for char in video_id)
+            name = f"triage_{source_index:02d}_{sample_index:02d}_{safe_id}_{int(start):06d}"
+            manifest.append(
+                {
+                    "name": name,
+                    "url": url,
+                    "start": round(start, 3),
+                    "end": round(end, 3),
+                    "source_video_id": item.get("id"),
+                    "source_duration": duration_value,
+                    "source_title": item.get("title"),
+                    "triage_fraction": round((start + effective_clip / 2.0) / duration, 4),
+                    "notes": "Auto-generated unlabeled triage window. Inspect before assigning expected_count.",
+                }
+            )
+
+    return manifest
+
+
 def download_manifest(manifest_path: Path, output_dir: Path) -> None:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -130,7 +192,7 @@ def download_manifest(manifest_path: Path, output_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Discover GDIT Hawk Cam uploads/streams or fetch timestamped regression clips."
+        description="Discover, triage, or fetch timestamped GDIT Hawk Cam regression clips."
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -155,6 +217,20 @@ def main() -> None:
         default=Path("tests/fixtures/discovered.json"),
     )
 
+    triage_parser = sub.add_parser("triage")
+    triage_parser.add_argument(
+        "--discovered",
+        type=Path,
+        default=Path("tests/fixtures/discovered.json"),
+    )
+    triage_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("tests/fixtures/triage.json"),
+    )
+    triage_parser.add_argument("--clip-seconds", type=float, default=10.0)
+    triage_parser.add_argument("--samples-per-stream", type=int, default=2)
+
     fetch_parser = sub.add_parser("fetch")
     fetch_parser.add_argument(
         "--manifest",
@@ -174,6 +250,22 @@ def main() -> None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(entries, indent=2), encoding="utf-8")
         print(f"Wrote {len(entries)} deduplicated entries to {args.output}")
+        return
+
+    if args.command == "triage":
+        entries = json.loads(args.discovered.read_text(encoding="utf-8"))
+        manifest = build_triage_manifest(
+            entries,
+            clip_seconds=args.clip_seconds,
+            samples_per_stream=args.samples_per_stream,
+        )
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        total_seconds = sum(float(item["end"]) - float(item["start"]) for item in manifest)
+        print(
+            f"Wrote {len(manifest)} unlabeled triage windows "
+            f"({total_seconds:.0f}s total) to {args.output}"
+        )
         return
 
     download_manifest(args.manifest, args.output_dir)
