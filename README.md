@@ -123,10 +123,10 @@ The default takes two evenly spaced 10-second windows from every discovered stre
 Download those windows:
 
 ```powershell
-uv run python tools\fetch_test_clips.py fetch --manifest tests\fixtures\triage.json --output-dir tests\fixtures\triage
+uv run python tools\fetch_test_clips.py fetch --manifest tests\fixtures\triage.json --output-dir tests\fixtures\triage --continue-on-error
 ```
 
-Then use the current detector as a search aid:
+Completed clips are skipped automatically on a rerun, so the batch is resumable. Then use the current detector as a search aid:
 
 ```powershell
 uv run python tools\triage_archive.py
