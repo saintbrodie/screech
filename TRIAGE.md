@@ -37,8 +37,11 @@ The generated windows are deliberately unlabeled. YOLO output is not ground trut
 ```powershell
 uv run python tools\fetch_test_clips.py fetch `
   --manifest tests\fixtures\triage.json `
-  --output-dir tests\fixtures\triage
+  --output-dir tests\fixtures\triage `
+  --continue-on-error
 ```
+
+Completed clips are skipped automatically when the command is re-run, so the batch is resumable. Use `--overwrite` only when you intentionally want to fetch an existing clip again.
 
 ## 4. Rank clips with the current detector
 
