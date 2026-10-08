@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 class Database:
@@ -128,43 +129,39 @@ class Database:
             for row in rows
         ]
 
-    def daily_stats(self, days: int = 7) -> list[dict[str, Any]]:
+    def daily_stats(self, days: int = 7, *, now: datetime | None = None) -> list[dict[str, Any]]:
         days = max(1, min(days, 90))
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days - 1)
-        cutoff_day = cutoff.date().isoformat()
-
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT
-                    date(timestamp) AS day,
-                    COUNT(*) AS samples,
-                    SUM(CASE WHEN hawk_count > 0 THEN 1 ELSE 0 END) AS occupied_samples,
-                    SUM(CASE WHEN behavior = 'Active / Moving' THEN 1 ELSE 0 END) AS active_samples
-                FROM observations
-                WHERE date(timestamp) >= date(?)
-                GROUP BY date(timestamp)
-                ORDER BY day ASC
-                """,
-                (cutoff_day,),
-            ).fetchall()
-
-        by_day = {row["day"]: row for row in rows}
+        local_zone = ZoneInfo("America/New_York")
+        current = now if now is not None else datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise ValueError("now must include a timezone")
+        first_day = current.astimezone(local_zone).date() - timedelta(days=days - 1)
         result: list[dict[str, Any]] = []
-        for offset in range(days):
-            day = (cutoff.date() + timedelta(days=offset)).isoformat()
-            row = by_day.get(day)
-            samples = int(row["samples"]) if row else 0
-            occupied = int(row["occupied_samples"] or 0) if row else 0
-            active = int(row["active_samples"] or 0) if row else 0
-            result.append(
-                {
-                    "day": day,
-                    "samples": samples,
-                    "occupancy_pct": round((occupied / samples) * 100, 1) if samples else 0.0,
-                    "activity_pct": round((active / samples) * 100, 1) if samples else 0.0,
-                }
-            )
+        with self._connect() as conn:
+            for offset in range(days):
+                day = first_day + timedelta(days=offset)
+                start = datetime.combine(day, datetime.min.time(), local_zone)
+                end = datetime.combine(day + timedelta(days=1), datetime.min.time(), local_zone)
+                # SQLite stores UTC. Local midnight boundaries can be 23 or 25
+                # hours apart; do not assume every day is exactly 24 hours.
+                bounds = tuple(value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                               for value in (start, end))
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS samples,
+                        SUM(CASE WHEN hawk_count > 0 THEN 1 ELSE 0 END) AS occupied_samples,
+                        SUM(CASE WHEN behavior = 'Active / Moving' THEN 1 ELSE 0 END) AS active_samples
+                    FROM observations WHERE timestamp >= ? AND timestamp < ?
+                    """, bounds,
+                ).fetchone()
+                samples = int(row["samples"])
+                occupied = int(row["occupied_samples"] or 0)
+                active = int(row["active_samples"] or 0)
+                result.append({
+                    "day": day.isoformat(), "samples": samples,
+                    "occupancy_pct": round(occupied / samples * 100, 1) if samples else 0.0,
+                    "activity_pct": round(active / samples * 100, 1) if samples else 0.0,
+                })
         return result
 
     def health(self) -> dict[str, Any]:

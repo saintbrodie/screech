@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import os
+import re
+import shutil
+import signal
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -103,7 +109,7 @@ def build_triage_manifest(
     samples_per_stream: int = 2,
 ) -> list[dict[str, Any]]:
     """Create evenly spaced short windows for quickly triaging an archive."""
-    if clip_seconds <= 0:
+    if not math.isfinite(clip_seconds) or clip_seconds <= 0:
         raise ValueError("clip_seconds must be positive")
     if samples_per_stream < 1:
         raise ValueError("samples_per_stream must be at least 1")
@@ -122,7 +128,7 @@ def build_triage_manifest(
             duration = float(duration_value)
         except (TypeError, ValueError):
             continue
-        if not url or duration <= 0:
+        if not url or not math.isfinite(duration) or duration <= 0:
             continue
 
         effective_clip = min(clip_seconds, duration)
@@ -161,9 +167,49 @@ def build_triage_manifest(
 
 def _completed_output(output_dir: Path, name: str) -> Path | None:
     for path in output_dir.glob(f"{name}.*"):
-        if path.is_file() and not path.name.endswith((".part", ".ytdl")):
+        # Sidecars and separate format downloads are not completed clips.
+        if (path.is_file() and path.stem == name
+                and path.suffix.lower() in {".mp4", ".mkv", ".mov", ".webm"}
+                and path.stat().st_size > 0):
             return path
     return None
+
+
+def _stop_download(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        # Terminate this worker and its ffmpeg children, never other downloads.
+        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       creationflags=subprocess.CREATE_NO_WINDOW, check=False)
+    else:
+        os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+
+def _download_with_timeout(options: dict[str, Any], url: str, timeout_seconds: float) -> None:
+    process = subprocess.Popen(
+        [sys.executable, str(Path(__file__).resolve()), "_download"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        encoding="utf-8", errors="replace",
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        start_new_session=os.name != "nt",
+    )
+    try:
+        output, _ = process.communicate(json.dumps({"options": options, "url": url}), timeout=timeout_seconds)
+        if output:
+            # ffmpeg errors can contain long signed CDN URLs. Keep diagnostics
+            # readable without printing those ephemeral request parameters.
+            print(re.sub(r"https?://[^\s'\"]+", "<media-url>", output), end="")
+    except subprocess.TimeoutExpired:
+        _stop_download(process)
+        raise DownloadError(f"Clip extraction exceeded {timeout_seconds:g} seconds") from None
+    except BaseException:
+        _stop_download(process)
+        raise
+    if process.returncode:
+        raise DownloadError(f"Download worker exited with code {process.returncode}")
 
 
 def download_manifest(
@@ -171,7 +217,10 @@ def download_manifest(
     output_dir: Path,
     continue_on_error: bool = False,
     skip_existing: bool = True,
+    timeout_seconds: float = 120.0,
 ) -> None:
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be positive and finite")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     output_dir.mkdir(parents=True, exist_ok=True)
     failures: list[str] = []
@@ -185,8 +234,8 @@ def download_manifest(
         url = clip["url"]
         start = float(clip["start"])
         end = float(clip["end"])
-        if end <= start:
-            raise ValueError(f"{name}: end must be after start")
+        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+            raise ValueError(f"{name}: range must be finite, nonnegative, with end after start")
 
         if skip_existing:
             existing = _completed_output(output_dir, name)
@@ -199,15 +248,24 @@ def download_manifest(
         options = {
             "quiet": False,
             "no_warnings": False,
-            "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+            "socket_timeout": 20,
+            "retries": 1,
+            "external_downloader_args": {
+                "ffmpeg_i": ["-rw_timeout", "20000000", "-loglevel", "error", "-nostats"],
+            },
+            # Regression inference needs video only. Prefer H.264 for inexpensive
+            # local decoding; avoid a second remote audio input for every slice.
+            "format": "bestvideo[height<=1080][vcodec^=avc1]/bestvideo[height<=1080]/best[height<=1080]/best",
             "merge_output_format": "mp4",
-            "download_ranges": download_range_func([], [[start, end]]),
+            "clip_range": [start, end],
             "force_keyframes_at_cuts": True,
+            "overwrites": not skip_existing,
             "outtmpl": str(output_dir / f"{name}.%(ext)s"),
         }
+        if not shutil.which("deno") and shutil.which("node"):
+            options["js_runtimes"] = {"node": {"path": shutil.which("node")}}
         try:
-            with YoutubeDL(options) as ydl:
-                ydl.download([url])
+            _download_with_timeout(options, url, timeout_seconds)
         except DownloadError as exc:
             if not continue_on_error:
                 raise
@@ -264,6 +322,10 @@ def main() -> None:
 
     fetch_parser = sub.add_parser("fetch")
     fetch_parser.add_argument(
+        "--timeout-seconds", type=float, default=120.0,
+        help="Maximum elapsed time per clip, including extraction and ffmpeg (default: 120).",
+    )
+    fetch_parser.add_argument(
         "--manifest",
         type=Path,
         default=Path("tests/fixtures/clips.json"),
@@ -314,8 +376,20 @@ def main() -> None:
         args.output_dir,
         continue_on_error=args.continue_on_error,
         skip_existing=not args.overwrite,
+        timeout_seconds=args.timeout_seconds,
     )
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["_download"]:
+        payload = json.load(sys.stdin)
+        options = payload["options"]
+        start, end = options.pop("clip_range")
+        options["download_ranges"] = download_range_func([], [[start, end]])
+        try:
+            with YoutubeDL(options) as ydl:
+                ydl.download([payload["url"]])
+        except DownloadError:
+            raise SystemExit(1) from None
+    else:
+        main()

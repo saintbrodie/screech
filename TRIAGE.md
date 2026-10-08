@@ -63,13 +63,31 @@ Candidate categories are heuristics for review:
 - `active_one_bird_candidate` — persistent one-bird detection with substantial movement signal
 - `one_bird_candidate` — persistent one-bird detection
 - `empty_candidate` — 10% or fewer sampled frames had a detection
-- `unreadable` — local clip could not be opened
+- `unreadable` — local clip is missing, could not be opened, or analysis failed; unavailable clips have no labeling controls in the review page
 
 The report includes source video URL and source timestamps so useful clips can be promoted into the permanent labeled regression manifest. For collaborative review, share `triage-results.json` first; only the previews for ambiguous/high-value candidates need to be shared afterward.
 
 ## 5. Human-label useful clips
 
 Review the annotated previews and the corresponding local clips. Promote representative cases into `tests/fixtures/clips.json` with `expected_count` only when the count is visually unambiguous.
+
+Build an offline review page with playable local clips and blank human-label fields:
+
+```powershell
+uv run python tools\review_triage.py build
+Start-Process tests\fixtures\triage-review.html
+```
+
+Watch each full clip. Choose a constant count only if it holds throughout the clip. For changing or uncertain counts, choose `Count changes` or `Count uncertain / hard case`; those remain unlabeled for count accuracy. Record behavior, lighting, occlusion, and detector errors in notes. Check the verification box only after review, then download `triage-labels.json`. Save before closing the page; edits are not persisted automatically.
+
+Promote the downloaded reviews using their original source ranges:
+
+```powershell
+uv run python tools\review_triage.py promote --labels "$env:USERPROFILE\Downloads\triage-labels.json"
+uv run python tools\fetch_test_clips.py fetch
+```
+
+Promotion validates explicit verification and counts, rejects unknown/duplicate names, and merges selected entries into `clips.json`, preserving other fixtures. Repeated promotion updates the same named fixtures. Detector suggestions never become labels automatically. Downloading promoted fixtures places them in the benchmark's default `clips` directory.
 
 Aim to collect:
 
@@ -92,3 +110,5 @@ uv run python tools\benchmark_models.py
 ```
 
 Once `expected_count` labels exist, `exact_count_accuracy_pct` becomes a real ground-truth metric rather than just a smoke-test statistic.
+
+The fetcher uses Node when Deno is absent and Node is available. It prefers H.264 video without audio because detector fixtures only need images. Each clip runs in a worker with a 120-second elapsed-time limit, including ffmpeg; use `--timeout-seconds` to adjust it for slower connections. A timeout terminates that worker and its child processes, then `--continue-on-error` moves on. Resume ignores sidecars, empty files, and separate unmerged video/audio downloads. If a final video is damaged or truncated, use `--overwrite` to fetch it again. Triage checkpoints the report after each clip and records failed analyses as `unreadable` so remaining clips can still be reviewed.

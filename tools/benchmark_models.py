@@ -24,8 +24,12 @@ def load_expected_counts(manifest_path: Path | None) -> dict[str, int]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     expected: dict[str, int] = {}
     for item in manifest:
+        if item.get("enabled", True) is False:
+            continue
         value = item.get("expected_count")
-        if isinstance(value, int):
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError(f"{item.get('name')}: expected_count must be a nonnegative integer")
+        if value is not None:
             expected[item["name"]] = value
     return expected
 
@@ -64,22 +68,23 @@ def analyze_clip(
 
     detector.cy_history.clear()
 
-    while True:
-        ok, frame = capture.read()
-        if not ok:
-            break
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
 
-        if frame_index % sample_frames == 0:
-            started = time.perf_counter()
-            summary = detector.analyze(frame)
-            latencies.append(time.perf_counter() - started)
-            counts.append(summary.hawk_count)
-            if summary.confidence is not None:
-                confidences.append(summary.confidence)
+            if frame_index % sample_frames == 0:
+                started = time.perf_counter()
+                summary = detector.analyze(frame)
+                latencies.append(time.perf_counter() - started)
+                counts.append(summary.hawk_count)
+                if summary.confidence is not None:
+                    confidences.append(summary.confidence)
 
-        frame_index += 1
-
-    capture.release()
+            frame_index += 1
+    finally:
+        capture.release()
 
     sampled = len(counts)
     exact_accuracy = None
@@ -163,6 +168,8 @@ def main() -> None:
         default=Path("tests/fixtures/benchmark-results.json"),
     )
     args = parser.parse_args()
+    if not 0 < args.sample_seconds < float("inf"):
+        parser.error("--sample-seconds must be positive and finite")
 
     clips = args.clips
     if not clips:

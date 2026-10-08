@@ -21,7 +21,17 @@ def load_manifest(path: Path | None) -> dict[str, dict[str, Any]]:
     if path is None or not path.exists():
         return {}
     items = json.loads(path.read_text(encoding="utf-8"))
-    return {str(item.get("name")): item for item in items if item.get("name")}
+    return {str(item.get("name")): item for item in items
+            if item.get("name") and item.get("enabled", True) is not False}
+
+
+def source_fields(source: dict[str, Any] | None) -> dict[str, Any]:
+    source = source or {}
+    return {
+        "source_url": source.get("url"), "source_start": source.get("start"),
+        "source_end": source.get("end"), "source_video_id": source.get("source_video_id"),
+        "human_label": None,
+    }
 
 
 def classify(counts: list[int], active_count: int) -> str:
@@ -57,10 +67,12 @@ def analyze_clip(
 ) -> dict[str, Any]:
     capture = cv2.VideoCapture(str(clip))
     if not capture.isOpened():
+        capture.release()
         return {
             "clip": clip.name,
             "category": "unreadable",
             "error": "could_not_open",
+            **source_fields(source),
         }
 
     fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
@@ -75,40 +87,48 @@ def analyze_clip(
 
     detector.cy_history.clear()
     frame_index = 0
-    while True:
-        ok, frame = capture.read()
-        if not ok:
-            break
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
 
-        if frame_index % sample_frames == 0:
-            summary = detector.analyze(frame)
-            timestamp = frame_index / fps
-            counts.append(summary.hawk_count)
-            if summary.confidence is not None:
-                confidences.append(summary.confidence)
-            if summary.behavior == "Active / Moving":
-                active_count += 1
+            if frame_index % sample_frames == 0:
+                summary = detector.analyze(frame)
+                timestamp = frame_index / fps
+                counts.append(summary.hawk_count)
+                if summary.confidence is not None:
+                    confidences.append(summary.confidence)
+                if summary.behavior == "Active / Moving":
+                    active_count += 1
 
-            sample_records.append(
-                {
-                    "timestamp_seconds": round(timestamp, 3),
-                    "hawk_count": summary.hawk_count,
-                    "behavior": summary.behavior,
-                    "confidence": summary.confidence,
-                }
-            )
+                sample_records.append(
+                    {
+                        "timestamp_seconds": round(timestamp, 3),
+                        "hawk_count": summary.hawk_count,
+                        "behavior": summary.behavior,
+                        "confidence": summary.confidence,
+                    }
+                )
 
-            if best_summary is None or representative_score(summary) > representative_score(best_summary):
-                best_summary = summary
-                best_frame = frame.copy()
-                best_timestamp = timestamp
+                if best_summary is None or representative_score(summary) > representative_score(best_summary):
+                    best_summary = summary
+                    best_frame = frame.copy()
+                    best_timestamp = timestamp
 
-        frame_index += 1
-
-    capture.release()
+            frame_index += 1
+    finally:
+        capture.release()
 
     sampled = len(counts)
     category = classify(counts, active_count)
+    duration_seconds = frame_index / fps
+    expected_duration = None
+    if source and source.get("start") is not None and source.get("end") is not None:
+        expected_duration = float(source["end"]) - float(source["start"])
+    truncated = expected_duration is not None and duration_seconds + 0.5 < expected_duration
+    if truncated:
+        category = "unreadable"
     histogram = {str(count): counts.count(count) for count in sorted(set(counts))}
     preview_path = None
     if best_frame is not None and best_summary is not None:
@@ -116,10 +136,11 @@ def analyze_clip(
         preview_path = preview_dir / f"{clip.stem}.jpg"
         detector.save_image(preview_path, detector.annotate(best_frame, best_summary))
 
-    source = source or {}
     return {
         "clip": clip.name,
         "category": category,
+        "error": "truncated_clip" if truncated else None,
+        "decoded_duration_seconds": round(duration_seconds, 3),
         "sampled_frames": sampled,
         "detection_rate_pct": (
             round(100.0 * sum(count > 0 for count in counts) / sampled, 1)
@@ -135,11 +156,7 @@ def analyze_clip(
         "count_histogram": histogram,
         "representative_timestamp_seconds": round(best_timestamp, 3),
         "preview": str(preview_path) if preview_path else None,
-        "source_url": source.get("url"),
-        "source_start": source.get("start"),
-        "source_end": source.get("end"),
-        "source_video_id": source.get("source_video_id"),
-        "human_label": None,
+        **source_fields(source),
         "samples": sample_records,
     }
 
@@ -179,6 +196,12 @@ def print_summary(results: list[dict[str, Any]]) -> None:
             print(f"  {category:<28} {counts[category]:>3}")
 
 
+def write_report(path: Path, results: list[dict[str, Any]]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(sorted(results, key=sort_key), indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Scan downloaded Hawk Cam triage clips and rank candidates for human labeling."
@@ -206,36 +229,53 @@ def main() -> None:
         default=Path("tests/fixtures/triage-results.json"),
     )
     args = parser.parse_args()
+    if not 0 < args.sample_seconds < float("inf"):
+        parser.error("--sample-seconds must be positive and finite")
 
     clips = sorted(
         path
         for path in args.clips_dir.glob("*")
         if path.suffix.lower() in {".mp4", ".mkv", ".mov", ".webm"}
     )
-    if not clips:
+    manifest = load_manifest(args.manifest)
+    if not clips and not manifest:
         raise SystemExit(f"No video clips found in {args.clips_dir}")
 
-    manifest = load_manifest(args.manifest)
     detector = HawkDetector(replace(settings, model_path=args.model))
-    print(f"Loading {args.model}...")
-    detector.load()
+    if clips:
+        print(f"Loading {args.model}...")
+        detector.load()
 
-    results: list[dict[str, Any]] = []
+    available = {clip.stem for clip in clips}
+    results: list[dict[str, Any]] = [
+        {"clip": f"{name}.mp4", "category": "unreadable", "error": "missing_clip",
+         **source_fields(source)}
+        for name, source in manifest.items() if name not in available
+    ]
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     for index, clip in enumerate(clips, start=1):
         print(f"[{index}/{len(clips)}] {clip.name}")
-        results.append(
-            analyze_clip(
+        try:
+            result = analyze_clip(
                 clip,
                 detector,
                 args.sample_seconds,
                 args.preview_dir,
                 manifest.get(clip.stem),
             )
-        )
+        except Exception as exc:
+            result = {"clip": clip.name, "category": "unreadable", "error": str(exc),
+                      **source_fields(manifest.get(clip.stem))}
+            print(f"Warning: could not analyze {clip.name}: {exc}", file=sys.stderr)
+        results.append(result)
+        result["model"] = args.model
+        result["sample_seconds"] = args.sample_seconds
+        # Preserve completed analyses if a later clip or the process fails.
+        write_report(args.output, results)
 
     results.sort(key=sort_key)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    write_report(args.output, results)
     print_summary(results)
     print(f"\nWrote ranked triage report to {args.output}")
     print(f"Representative annotated previews are in {args.preview_dir}")

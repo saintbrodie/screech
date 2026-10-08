@@ -134,6 +134,8 @@ uv run python tools\triage_archive.py
 
 This writes a ranked `tests/fixtures/triage-results.json` plus one representative annotated preview per clip in `tests/fixtures/triage-previews/`. Candidate categories help find possible multi-bird scenes, persistent one-bird footage, activity, empty nest footage, and transition/hard cases. They are triage hints only; visually inspect clips before assigning ground-truth labels.
 
+Build the local review page with `uv run python tools\review_triage.py build`. Play full clips, enter human labels, and export verified reviews. The `promote` command merges those labels into the fixture manifest while leaving changing/uncertain counts unlabeled. See [TRIAGE.md](TRIAGE.md) for the full review, promotion, and benchmark workflow. Downloads have a configurable per-clip elapsed-time limit; missing or failed clips remain visible in the report.
+
 See `TRIAGE.md` for the full workflow and tuning options.
 
 For the permanent regression set, choose timestamp ranges that cover useful cases:
@@ -229,6 +231,10 @@ Local fixture files loop by default.
 
 Runtime snapshots are served from `/snapshots/...`.
 
+Daily occupancy/activity buckets use `America/New_York` calendar dates, including daylight-saving transitions. Database timestamps remain UTC; no data migration is needed. The bundled `tzdata` dependency supplies timezone rules on Windows.
+
+Health requires a loaded model, a reachable database, a fresh source frame, and successful processing of the latest completed scan. `SCREECH_FRAME_STALE_SECONDS` defaults to 30 seconds; increase it if you intentionally scan less often. A live reader that stops delivering new frames is reconnected. Inference, snapshot, and database errors preserve the healthy video connection. The dashboard displays the latest recorded error with its timestamp, and labels it as historical after recovery. Shutdown interrupts scan/retry pauses and releases video captures.
+
 ## Detection notes
 
 The current production path still detects the generic COCO `bird` class; this is not yet a species-specific hawk model.
@@ -247,13 +253,13 @@ Likewise, `Active / Moving` means the normalized vertical center of the detected
 
 ## Development checks
 
-The lightweight test suite does not download YOLO/PyTorch models:
+The test suite uses installed runtime libraries but mocks model loading and network video sources; it does not download model weights:
 
 ```powershell
 uv run --extra dev pytest -q
 ```
 
-CI also compiles all Python sources and runs the state-machine/database tests.
+CI checks the committed `uv.lock`, installs the locked project with development dependencies, compiles all Python sources, and runs state-machine, database, archive-workflow, runtime-failure, and FastAPI integration tests. After changing dependencies, regenerate the lock with `uv lock` and include it in the commit.
 
 ## Project layout
 

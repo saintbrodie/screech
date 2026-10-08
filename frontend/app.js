@@ -171,8 +171,8 @@ function renderStats(stats) {
     }
 
     const today = stats[stats.length - 1];
-    document.getElementById("today-occupancy").textContent = `${today.occupancy_pct}%`;
-    document.getElementById("today-activity").textContent = `${today.activity_pct}%`;
+    document.getElementById("today-occupancy").textContent = today.samples ? `${today.occupancy_pct}%` : "--";
+    document.getElementById("today-activity").textContent = today.samples ? `${today.activity_pct}%` : "--";
 
     stats.forEach((day) => {
         const row = document.createElement("div");
@@ -259,16 +259,34 @@ async function fetchAll() {
         }
 
         renderStats(data.stats);
+        renderRuntimeError(data.health);
 
         const frameAge = data.health?.frame_age_seconds;
         const ageText = frameAge === null || frameAge === undefined ? "no frame" : `${frameAge}s ago`;
         document.getElementById("health-text").innerText =
-            `${data.health?.model || "model"} • frame ${ageText}`;
+            `${data.health?.model || "model"} • frame ${ageText}${data.health?.frame_fresh === false ? " • stale / unavailable" : ""}`;
     } catch (err) {
         console.error("Critical Poll Error", err);
         document.getElementById("stream-sys").innerText = "API Offline";
         document.getElementById("health-text").innerText = "dashboard poll failed";
     }
+}
+
+function renderRuntimeError(health) {
+    const element = document.getElementById("runtime-error");
+    const error = health?.last_error;
+    element.hidden = !error;
+    if (!error) {
+        element.textContent = "";
+        return;
+    }
+    const recordedAt = health.last_error_at === null || health.last_error_at === undefined
+        ? null : new Date(health.last_error_at * 1000);
+    const when = recordedAt && !Number.isNaN(recordedAt.getTime())
+        ? ` (${recordedAt.toLocaleString()})` : "";
+    const label = health.processing_ok && health.source_ok
+        ? "Last recorded error" : "Runtime error";
+    element.textContent = `${label}${when}: ${error}`;
 }
 
 function init() {

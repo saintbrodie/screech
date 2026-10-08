@@ -42,6 +42,7 @@ class Settings:
 
     scan_interval_seconds: float = _env_float("SCREECH_SCAN_INTERVAL_SECONDS", 5.0)
     stream_retry_seconds: float = _env_float("SCREECH_STREAM_RETRY_SECONDS", 10.0)
+    frame_stale_seconds: float = _env_float("SCREECH_FRAME_STALE_SECONDS", 30.0)
     empty_confirmations: int = _env_int("SCREECH_EMPTY_CONFIRMATIONS", 8)
     state_confirmations: int = _env_int("SCREECH_STATE_CONFIRMATIONS", 3)
     behavior_history: int = _env_int("SCREECH_BEHAVIOR_HISTORY", 6)

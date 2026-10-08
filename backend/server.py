@@ -119,6 +119,7 @@ async def get_health():
         db_health["ok"]
         and processor_health["model_loaded"]
         and processor_health["source_ok"]
+        and processor_health["processing_ok"]
     )
     return {
         "ok": ok,

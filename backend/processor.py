@@ -109,6 +109,7 @@ class HawkProcessor:
             "source_mode": "configured" if settings.video_source else "youtube_live",
             "last_error": None,
             "last_error_at": None,
+            "processing_ok": False,
         }
 
     def request_stop(self) -> None:
@@ -117,6 +118,15 @@ class HawkProcessor:
     def _record_error(self, category: str, exc: Exception) -> None:
         self.state["last_error"] = f"{category}: {exc}"
         self.state["last_error_at"] = time.time()
+        if category in {"Processing error", "Media write error", "Database event error",
+                        "Database observation error"}:
+            self.state["processing_ok"] = False
+
+    async def _pause(self, seconds: float) -> None:
+        try:
+            await asyncio.wait_for(self.stop_event.wait(), timeout=seconds)
+        except TimeoutError:
+            pass
 
     @staticmethod
     def _is_network_source(source: str) -> bool:
@@ -207,12 +217,14 @@ class HawkProcessor:
         if self.file_capture is not None:
             ok, frame = await asyncio.to_thread(self.file_capture.read)
             if ok and frame is not None:
+                self.state["last_frame_at"] = time.time()
                 return frame
 
             if self.settings.loop_local_source:
                 await asyncio.to_thread(self.file_capture.set, cv2.CAP_PROP_POS_FRAMES, 0)
                 ok, frame = await asyncio.to_thread(self.file_capture.read)
                 if ok and frame is not None:
+                    self.state["last_frame_at"] = time.time()
                     return frame
 
             await self._release_capture()
@@ -221,6 +233,11 @@ class HawkProcessor:
         assert self.live_capture is not None
         frame = self.live_capture.latest()
         if frame is not None and self.live_capture.alive:
+            captured_at = self.live_capture.last_frame_at
+            if captured_at is None or time.time() - captured_at >= self.settings.frame_stale_seconds:
+                await self._release_capture()
+                raise RuntimeError("Live frame grabber is stale")
+            self.state["last_frame_at"] = captured_at
             return frame
 
         error = self.live_capture.error or "Live frame grabber stopped"
@@ -257,6 +274,7 @@ class HawkProcessor:
 
     async def _process_frame(self, frame) -> None:
         summary = await asyncio.to_thread(self.detector.analyze, frame)
+        processing_failed = False
         now = time.time()
 
         self.state["raw_status"] = summary.raw_status
@@ -267,7 +285,6 @@ class HawkProcessor:
         )
         self.state["identity"] = summary.identity
         self.state["last_updated"] = now
-        self.state["last_frame_at"] = now
         self.state["stream_health"] = "Fixture" if self.file_capture is not None else "Live"
 
         transition = self.machine.update(summary.hawk_count, summary.identity)
@@ -279,6 +296,7 @@ class HawkProcessor:
             try:
                 snapshot_path = await self._save_transition_media(frame, summary)
             except Exception as exc:
+                processing_failed = True
                 self._record_error("Media write error", exc)
 
             try:
@@ -291,6 +309,7 @@ class HawkProcessor:
                     snapshot_path=snapshot_path,
                 )
             except Exception as exc:
+                processing_failed = True
                 self._record_error("Database event error", exc)
         elif self.machine.stable_status:
             self.state["status"] = self.machine.stable_status
@@ -310,7 +329,9 @@ class HawkProcessor:
                     confidence=summary.confidence,
                 )
             except Exception as exc:
+                processing_failed = True
                 self._record_error("Database observation error", exc)
+        self.state["processing_ok"] = not processing_failed
 
     async def run(self) -> None:
         self.started_at = time.time()
@@ -340,7 +361,7 @@ class HawkProcessor:
                     self.state["stream_health"] = "Offline"
                     self.state["status"] = f"Source error: {exc}"
                     await self._release_capture()
-                    await asyncio.sleep(self.settings.stream_retry_seconds)
+                    await self._pause(self.settings.stream_retry_seconds)
                     continue
 
                 try:
@@ -351,23 +372,29 @@ class HawkProcessor:
                     self._record_error("Processing error", exc)
                     self.state["status"] = f"Processing error: {exc}"
 
-                await asyncio.sleep(self.settings.scan_interval_seconds)
+                await self._pause(self.settings.scan_interval_seconds)
         finally:
             await self._release_capture()
+            if self.model_loaded or self.stop_event.is_set():
+                self.state["stream_health"] = "Stopped"
 
     def health(self) -> dict[str, Any]:
         now = time.time()
         frame_age = (
-            round(now - self.state["last_frame_at"], 1)
-            if self.state["last_frame_at"]
+            max(0.0, now - self.state["last_frame_at"])
+            if self.state["last_frame_at"] is not None
             else None
         )
-        source_ok = self.state["stream_health"] in {"Live", "Fixture"}
+        frame_fresh = frame_age is not None and frame_age < self.settings.frame_stale_seconds
+        source_ok = self.state["stream_health"] in {"Live", "Fixture"} and frame_fresh
         return {
             "model_loaded": self.model_loaded,
             "source_ok": source_ok,
             "stream_health": self.state["stream_health"],
-            "frame_age_seconds": frame_age,
+            "frame_age_seconds": round(frame_age, 1) if frame_age is not None else None,
+            "frame_fresh": frame_fresh,
+            "frame_stale_seconds": self.settings.frame_stale_seconds,
+            "processing_ok": self.state["processing_ok"],
             "source_mode": self.state["source_mode"],
             "model": self.settings.model_path,
             "last_error": self.state["last_error"],

@@ -138,6 +138,10 @@ h1 {
     line-height: 1.6;
 }
 
+.video-placeholder[hidden] {
+    display: none;
+}
+
 .status-bar {
     padding: 1rem;
     display: flex;
@@ -152,6 +156,7 @@ h1 {
 .health-text {
     color: var(--text-secondary);
     font-size: 0.75rem;
+    overflow-wrap: anywhere;
 }
 
 .pulse-dot {
@@ -201,6 +206,8 @@ h2 {
 
 #ai-text {
     font-weight: 700;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .raw-scan {
@@ -419,6 +426,19 @@ h2 {
 .stat-bar.activity {
     height: 2px;
     opacity: 0.55;
+}
+
+.runtime-error {
+    margin: 0.8rem 0;
+    padding: 0.7rem;
+    border: 1px solid #ffb454;
+    color: #ffca83;
+    font-size: 0.75rem;
+    overflow-wrap: anywhere;
+}
+
+.runtime-error[hidden] {
+    display: none;
 }
 
 @media (max-width: 900px) {

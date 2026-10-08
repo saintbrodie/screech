@@ -12,11 +12,13 @@ dependencies = [
     "ultralytics==8.4.138",
     "requests==2.34.2",
     "numpy==2.3.5",
+    "tzdata>=2025.2",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0,<10",
+    "httpx>=0.28,<1",
 ]
 clip = [
     "open-clip-torch==3.3.0",
