@@ -1,0 +1,458 @@
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from yt_dlp import YoutubeDL
+from yt_dlp.utils import DownloadError, download_range_func
+
+
+DEFAULT_CHANNEL = "https://www.youtube.com/@GDIT-HawkCam"
+DEFAULT_TABS = ("videos", "streams")
+
+
+def _missing_tab_message(message: str) -> bool:
+    lowered = message.lower()
+    return "this channel does not have a" in lowered and "tab" in lowered
+
+
+class DiscoveryLogger:
+    """Keep expected missing-tab errors from looking like discovery failures."""
+
+    def debug(self, message: str) -> None:
+        pass
+
+    def warning(self, message: str) -> None:
+        print(f"yt-dlp warning: {message}", file=sys.stderr)
+
+    def error(self, message: str) -> None:
+        if _missing_tab_message(message):
+            return
+        print(f"yt-dlp error: {message}", file=sys.stderr)
+
+
+def canonical_watch_url(item: dict[str, Any]) -> str | None:
+    video_id = item.get("id")
+    if video_id:
+        return f"https://www.youtube.com/watch?v={video_id}"
+
+    for key in ("webpage_url", "url"):
+        value = item.get(key)
+        if isinstance(value, str) and value.startswith(("http://", "https://")):
+            return value
+    return None
+
+
+def discover(
+    channel_url: str,
+    limit_per_tab: int,
+    tabs: tuple[str, ...] = DEFAULT_TABS,
+) -> list[dict[str, Any]]:
+    """Discover ordinary uploads and archived livestreams, deduplicated by video ID."""
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": "in_playlist",
+        "playlistend": limit_per_tab,
+        "logger": DiscoveryLogger(),
+    }
+
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    with YoutubeDL(options) as ydl:
+        for tab in tabs:
+            tab_url = f"{channel_url.rstrip('/')}/{tab}"
+            try:
+                info = ydl.extract_info(tab_url, download=False)
+            except DownloadError as exc:
+                if _missing_tab_message(str(exc)):
+                    print(f"Skipping unavailable channel tab: {tab}", file=sys.stderr)
+                else:
+                    print(f"Warning: could not inspect {tab_url}: {exc}", file=sys.stderr)
+                continue
+
+            for item in info.get("entries") or []:
+                video_id = item.get("id")
+                url = canonical_watch_url(item)
+                dedupe_key = str(video_id or url or item.get("title"))
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                entries.append(
+                    {
+                        "id": video_id,
+                        "title": item.get("title"),
+                        "url": url,
+                        "duration": item.get("duration"),
+                        "upload_date": item.get("upload_date"),
+                        "timestamp": item.get("timestamp"),
+                        "source_tab": tab,
+                    }
+                )
+
+    return entries
+
+
+def build_triage_manifest(
+    entries: list[dict[str, Any]],
+    clip_seconds: float = 10.0,
+    samples_per_stream: int = 2,
+) -> list[dict[str, Any]]:
+    """Create evenly spaced short windows for quickly triaging an archive."""
+    if not math.isfinite(clip_seconds) or clip_seconds <= 0:
+        raise ValueError("clip_seconds must be positive")
+    if samples_per_stream < 1:
+        raise ValueError("samples_per_stream must be at least 1")
+
+    manifest: list[dict[str, Any]] = []
+    fractions = [
+        (index + 1) / (samples_per_stream + 1)
+        for index in range(samples_per_stream)
+    ]
+
+    for source_index, item in enumerate(entries, start=1):
+        url = item.get("url")
+        video_id = str(item.get("id") or f"source{source_index:02d}")
+        duration_value = item.get("duration")
+        try:
+            duration = float(duration_value)
+        except (TypeError, ValueError):
+            continue
+        if not url or not math.isfinite(duration) or duration <= 0:
+            continue
+
+        effective_clip = min(clip_seconds, duration)
+        if duration <= effective_clip:
+            starts = [0.0]
+        else:
+            starts = []
+            for fraction in fractions:
+                center = duration * fraction
+                start = center - effective_clip / 2.0
+                start = max(0.0, min(duration - effective_clip, start))
+                rounded = round(start, 3)
+                if rounded not in starts:
+                    starts.append(rounded)
+
+        for sample_index, start in enumerate(starts, start=1):
+            end = min(duration, start + effective_clip)
+            safe_id = "".join(char if char.isalnum() else "_" for char in video_id)
+            name = f"triage_{source_index:02d}_{sample_index:02d}_{safe_id}_{int(start):06d}"
+            manifest.append(
+                {
+                    "name": name,
+                    "url": url,
+                    "start": round(start, 3),
+                    "end": round(end, 3),
+                    "source_video_id": item.get("id"),
+                    "source_duration": duration_value,
+                    "source_title": item.get("title"),
+                    "triage_fraction": round((start + effective_clip / 2.0) / duration, 4),
+                    "notes": "Auto-generated unlabeled triage window. Inspect before assigning expected_count.",
+                }
+            )
+
+    return manifest
+
+
+def _completed_output(output_dir: Path, name: str) -> Path | None:
+    for path in output_dir.glob(f"{name}.*"):
+        # Sidecars and separate format downloads are not completed clips.
+        if (path.is_file() and path.stem == name
+                and path.suffix.lower() in {".mp4", ".mkv", ".mov", ".webm"}
+                and path.stat().st_size > 0):
+            return path
+    return None
+
+
+def _stop_download(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        # Terminate this worker and its ffmpeg children, never other downloads.
+        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       creationflags=subprocess.CREATE_NO_WINDOW, check=False)
+    else:
+        os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+
+def _download_with_timeout(options: dict[str, Any], url: str, timeout_seconds: float) -> None:
+    process = subprocess.Popen(
+        [sys.executable, str(Path(__file__).resolve()), "_download"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        encoding="utf-8", errors="replace",
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        start_new_session=os.name != "nt",
+    )
+    try:
+        output, _ = process.communicate(json.dumps({"options": options, "url": url}), timeout=timeout_seconds)
+        if output:
+            # ffmpeg errors can contain long signed CDN URLs. Keep diagnostics
+            # readable without printing those ephemeral request parameters.
+            print(re.sub(r"https?://[^\s'\"]+", "<media-url>", output), end="")
+    except subprocess.TimeoutExpired:
+        _stop_download(process)
+        raise DownloadError(f"Clip extraction exceeded {timeout_seconds:g} seconds") from None
+    except BaseException:
+        _stop_download(process)
+        raise
+    if process.returncode:
+        raise DownloadError(f"Download worker exited with code {process.returncode}")
+
+
+def _ffmpeg_input_args() -> list[str]:
+    args = ["-rw_timeout", "20000000", "-loglevel", "error", "-nostats"]
+    executable = shutil.which("ffmpeg")
+    if executable is None:
+        return args
+    try:
+        result = subprocess.run(
+            [executable, "-hide_banner", "-h", "protocol=http"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=5, check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return args
+    help_text = result.stdout + result.stderr
+    supported = set(re.findall(r"^\s+-(\w+)\s", help_text, re.MULTILINE))
+    if result.returncode == 0 and {"request_size", "short_seek_size"} <= supported:
+        # Unbounded CDN reads can drain the entire archive during a backwards
+        # seek. Keep reads bounded and allow readahead within the same request.
+        # Older ffmpeg builds do not expose request_size; retain their defaults.
+        args += ["-request_size", "1048576", "-short_seek_size", "1048576"]
+    return args
+
+
+def _validate_output(path: Path, expected_seconds: float) -> None:
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "format=duration:stream=codec_type", "-of", "json", str(path)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10, check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        metadata = json.loads(result.stdout)
+        duration = float(metadata.get("format", {}).get("duration", 0))
+        has_video = any(stream.get("codec_type") == "video"
+                        for stream in metadata.get("streams", []))
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, AttributeError) as exc:
+        raise DownloadError(f"Could not validate {path.name} with ffprobe ({type(exc).__name__})") from None
+    if result.returncode or not has_video or not math.isfinite(duration) or duration <= 0:
+        raise DownloadError(f"{path.name}: output has no readable video duration")
+    if abs(duration - expected_seconds) > 0.5:
+        raise DownloadError(f"{path.name}: video duration {duration:g}s differs from requested {expected_seconds:g}s")
+
+
+def download_manifest(
+    manifest_path: Path,
+    output_dir: Path,
+    continue_on_error: bool = False,
+    skip_existing: bool = True,
+    timeout_seconds: float = 120.0,
+    max_height: int = 1080,
+) -> None:
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be positive and finite")
+    if isinstance(max_height, bool) or not isinstance(max_height, int) or max_height < 1:
+        raise ValueError("max_height must be a positive integer")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    failures: list[str] = []
+    ffmpeg_input_args = _ffmpeg_input_args()
+
+    for clip in manifest:
+        if clip.get("enabled", True) is False:
+            print(f"Skipping disabled fixture entry: {clip.get('name', '<unnamed>')}")
+            continue
+
+        name = clip["name"]
+        url = clip["url"]
+        start = float(clip["start"])
+        end = float(clip["end"])
+        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+            raise ValueError(f"{name}: range must be finite, nonnegative, with end after start")
+
+        existing = _completed_output(output_dir, name)
+        if skip_existing and existing is not None:
+            try:
+                _validate_output(existing, end - start)
+            except DownloadError as exc:
+                print(f"Retrying invalid existing clip: {exc}", file=sys.stderr)
+            else:
+                print(f"Skipping existing clip: {existing}")
+                continue
+
+        # yt-dlp's CLI calls this feature --download-sections, but the Python
+        # API consumes a callable in the `download_ranges` option.
+        options = {
+            "quiet": False,
+            "no_warnings": False,
+            "socket_timeout": 20,
+            "retries": 1,
+            "external_downloader_args": {
+                "ffmpeg_i": ffmpeg_input_args,
+            },
+            # Regression inference needs video only. Prefer H.264 for inexpensive
+            # local decoding; avoid a second remote audio input for every slice.
+            "format": (f"bestvideo[height<={max_height}][vcodec^=avc1]/"
+                       f"bestvideo[height<={max_height}]/best[height<={max_height}]"),
+            "merge_output_format": "mp4",
+            "clip_range": [start, end],
+            "force_keyframes_at_cuts": True,
+            "overwrites": not skip_existing or existing is not None,
+            "outtmpl": str(output_dir / f"{name}.%(ext)s"),
+        }
+        if not shutil.which("deno") and shutil.which("node"):
+            options["js_runtimes"] = {"node": {"path": shutil.which("node")}}
+        try:
+            _download_with_timeout(options, url, timeout_seconds)
+            output = _completed_output(output_dir, name)
+            if output is None:
+                raise DownloadError(f"{name}: worker produced no video output")
+            _validate_output(output, end - start)
+        except DownloadError as exc:
+            if not continue_on_error:
+                raise
+            failures.append(name)
+            print(f"Warning: failed to download {name}: {exc}", file=sys.stderr)
+
+    if failures:
+        print(
+            f"Completed with {len(failures)} failed clip(s): {', '.join(failures)}",
+            file=sys.stderr,
+        )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Discover, triage, or fetch timestamped GDIT Hawk Cam regression clips."
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    discover_parser = sub.add_parser("discover")
+    discover_parser.add_argument("--channel", default=DEFAULT_CHANNEL)
+    discover_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum entries to inspect per selected channel tab.",
+    )
+    discover_parser.add_argument(
+        "--tabs",
+        nargs="+",
+        choices=("videos", "streams"),
+        default=list(DEFAULT_TABS),
+        help="Channel tabs to inspect. Defaults to both videos and archived streams.",
+    )
+    discover_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("tests/fixtures/discovered.json"),
+    )
+
+    triage_parser = sub.add_parser("triage")
+    triage_parser.add_argument(
+        "--discovered",
+        type=Path,
+        default=Path("tests/fixtures/discovered.json"),
+    )
+    triage_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("tests/fixtures/triage.json"),
+    )
+    triage_parser.add_argument("--clip-seconds", type=float, default=10.0)
+    triage_parser.add_argument("--samples-per-stream", type=int, default=2)
+
+    fetch_parser = sub.add_parser("fetch")
+    fetch_parser.add_argument(
+        "--max-height", type=int, default=1080,
+        help="Maximum video height; use 720 or 480 to retry an invalid archive format.",
+    )
+    fetch_parser.add_argument(
+        "--timeout-seconds", type=float, default=120.0,
+        help="Maximum elapsed time per clip, including extraction and ffmpeg (default: 120).",
+    )
+    fetch_parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("tests/fixtures/clips.json"),
+    )
+    fetch_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("tests/fixtures/clips"),
+    )
+    fetch_parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Continue downloading remaining manifest entries if one clip fails.",
+    )
+    fetch_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-download clips even when a completed output with the same name exists.",
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "discover":
+        entries = discover(args.channel, args.limit, tuple(args.tabs))
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+        print(f"Wrote {len(entries)} deduplicated entries to {args.output}")
+        return
+
+    if args.command == "triage":
+        entries = json.loads(args.discovered.read_text(encoding="utf-8"))
+        manifest = build_triage_manifest(
+            entries,
+            clip_seconds=args.clip_seconds,
+            samples_per_stream=args.samples_per_stream,
+        )
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        total_seconds = sum(float(item["end"]) - float(item["start"]) for item in manifest)
+        print(
+            f"Wrote {len(manifest)} unlabeled triage windows "
+            f"({total_seconds:.0f}s total) to {args.output}"
+        )
+        return
+
+    download_manifest(
+        args.manifest,
+        args.output_dir,
+        continue_on_error=args.continue_on_error,
+        skip_existing=not args.overwrite,
+        timeout_seconds=args.timeout_seconds,
+        max_height=args.max_height,
+    )
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["_download"]:
+        payload = json.load(sys.stdin)
+        options = payload["options"]
+        start, end = options.pop("clip_range")
+        options["download_ranges"] = download_range_func([], [[start, end]])
+        try:
+            with YoutubeDL(options) as ydl:
+                ydl.download([payload["url"]])
+        except DownloadError:
+            raise SystemExit(1) from None
+    else:
+        main()
