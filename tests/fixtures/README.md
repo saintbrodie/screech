@@ -2,6 +2,22 @@
 
 Video files are intentionally not committed.
 
+`archive-labeled.json` preserves the 40 human-reviewed ten-second archive windows
+reviewed on October 9, 2026: 35 constant-count clips and five uncertain clips.
+Counts include visible chicks as well as adults; notes are descriptive and do not
+constitute identity or behavior ground truth. Uncertain clips have a null count.
+
+To reproduce this dataset and benchmark:
+
+```powershell
+uv run python tools/fetch_test_clips.py fetch --manifest tests/fixtures/archive-labeled.json --continue-on-error
+uv run python tools/benchmark_models.py --manifest tests/fixtures/archive-labeled.json
+```
+
+If a selected format produces invalid output, rerun the fetch with `--max-height
+720`, then `--max-height 480` if needed; valid outputs remain skipped. The local
+`clips.json` remains available for additional fixture selections.
+
 1. Discover recent uploads from the GDIT Hawk Cam channel:
 
    ```bash

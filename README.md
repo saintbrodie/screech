@@ -181,6 +181,8 @@ uv run python tools\benchmark_models.py
 
 The default comparison is `yolo11n.pt`, `yolo26n.pt`, and `yolov8n.pt`. It reports detection rate, exact-count accuracy where `expected_count` labels exist, mean confidence, count histograms, and mean/median inference time. Results are written to `tests/fixtures/benchmark-results.json`.
 
+The first 40-window human-reviewed archive set is preserved in `tests/fixtures/archive-labeled.json`. See the [labeled benchmark report](tests/fixtures/ARCHIVE_BENCHMARK.md) for count accuracy, occupancy errors, limitations, and reproduction commands. YOLOv8n leads exact-count accuracy on this initial set; production remains YOLO11n pending further validation.
+
 An initial 30-second public GDIT Hawk Cam smoke clip favored YOLO11n as the production default: it maintained similar detection coverage and latency to YOLO26n while avoiding repeated overlapping multi-bird detections seen from YOLO26n. Treat that as a provisional selection, not final accuracy evidence, because the smoke clip is not ground-truth labeled. Keep benchmarking against labeled archived fixtures as the regression set grows.
 
 You can override the candidates without changing code:

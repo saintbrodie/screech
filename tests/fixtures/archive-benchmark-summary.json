@@ -1,0 +1,138 @@
+{
+  "review_date": "2026-10-09",
+  "reviewed_clips": 40,
+  "constant_count_clips": 35,
+  "uncertain_clips": 5,
+  "sample_seconds": 1,
+  "confidence": 0.08,
+  "nms_iou": 0.5,
+  "min_box_area_ratio": 0.005,
+  "models": [
+    {
+      "model": "yolo11n.pt",
+      "clips": 35,
+      "frames": 350,
+      "correct_frames": 179,
+      "exact_count_accuracy_pct": 51.14,
+      "by_expected_count": {
+        "0": {
+          "clips": 9,
+          "frames": 90,
+          "correct_frames": 87,
+          "exact_count_accuracy_pct": 96.67
+        },
+        "1": {
+          "clips": 23,
+          "frames": 230,
+          "correct_frames": 91,
+          "exact_count_accuracy_pct": 39.57
+        },
+        "2": {
+          "clips": 1,
+          "frames": 10,
+          "correct_frames": 1,
+          "exact_count_accuracy_pct": 10.0
+        },
+        "3": {
+          "clips": 1,
+          "frames": 10,
+          "correct_frames": 0,
+          "exact_count_accuracy_pct": 0.0
+        },
+        "4": {
+          "clips": 1,
+          "frames": 10,
+          "correct_frames": 0,
+          "exact_count_accuracy_pct": 0.0
+        }
+      },
+      "mean_inference_ms": 23.58,
+      "empty_false_positive_frames": 3,
+      "occupied_missed_frames": 100
+    },
+    {
+      "model": "yolo26n.pt",
+      "clips": 35,
+      "frames": 350,
+      "correct_frames": 185,
+      "exact_count_accuracy_pct": 52.86,
+      "by_expected_count": {
+        "0": {
+          "clips": 9,
+          "frames": 90,
+          "correct_frames": 82,
+          "exact_count_accuracy_pct": 91.11
+        },
+        "1": {
+          "clips": 23,
+          "frames": 230,
+          "correct_frames": 102,
+          "exact_count_accuracy_pct": 44.35
+        },
+        "2": {
+          "clips": 1,
+          "frames": 10,
+          "correct_frames": 1,
+          "exact_count_accuracy_pct": 10.0
+        },
+        "3": {
+          "clips": 1,
+          "frames": 10,
+          "correct_frames": 0,
+          "exact_count_accuracy_pct": 0.0
+        },
+        "4": {
+          "clips": 1,
+          "frames": 10,
+          "correct_frames": 0,
+          "exact_count_accuracy_pct": 0.0
+        }
+      },
+      "mean_inference_ms": 26.95,
+      "empty_false_positive_frames": 8,
+      "occupied_missed_frames": 61
+    },
+    {
+      "model": "yolov8n.pt",
+      "clips": 35,
+      "frames": 350,
+      "correct_frames": 236,
+      "exact_count_accuracy_pct": 67.43,
+      "by_expected_count": {
+        "0": {
+          "clips": 9,
+          "frames": 90,
+          "correct_frames": 88,
+          "exact_count_accuracy_pct": 97.78
+        },
+        "1": {
+          "clips": 23,
+          "frames": 230,
+          "correct_frames": 148,
+          "exact_count_accuracy_pct": 64.35
+        },
+        "2": {
+          "clips": 1,
+          "frames": 10,
+          "correct_frames": 0,
+          "exact_count_accuracy_pct": 0.0
+        },
+        "3": {
+          "clips": 1,
+          "frames": 10,
+          "correct_frames": 0,
+          "exact_count_accuracy_pct": 0.0
+        },
+        "4": {
+          "clips": 1,
+          "frames": 10,
+          "correct_frames": 0,
+          "exact_count_accuracy_pct": 0.0
+        }
+      },
+      "mean_inference_ms": 27.96,
+      "empty_false_positive_frames": 2,
+      "occupied_missed_frames": 100
+    }
+  ]
+}
