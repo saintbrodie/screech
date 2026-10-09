@@ -212,18 +212,67 @@ def _download_with_timeout(options: dict[str, Any], url: str, timeout_seconds: f
         raise DownloadError(f"Download worker exited with code {process.returncode}")
 
 
+def _ffmpeg_input_args() -> list[str]:
+    args = ["-rw_timeout", "20000000", "-loglevel", "error", "-nostats"]
+    executable = shutil.which("ffmpeg")
+    if executable is None:
+        return args
+    try:
+        result = subprocess.run(
+            [executable, "-hide_banner", "-h", "protocol=http"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=5, check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return args
+    help_text = result.stdout + result.stderr
+    supported = set(re.findall(r"^\s+-(\w+)\s", help_text, re.MULTILINE))
+    if result.returncode == 0 and {"request_size", "short_seek_size"} <= supported:
+        # Unbounded CDN reads can drain the entire archive during a backwards
+        # seek. Keep reads bounded and allow readahead within the same request.
+        # Older ffmpeg builds do not expose request_size; retain their defaults.
+        args += ["-request_size", "1048576", "-short_seek_size", "1048576"]
+    return args
+
+
+def _validate_output(path: Path, expected_seconds: float) -> None:
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "format=duration:stream=codec_type", "-of", "json", str(path)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10, check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        metadata = json.loads(result.stdout)
+        duration = float(metadata.get("format", {}).get("duration", 0))
+        has_video = any(stream.get("codec_type") == "video"
+                        for stream in metadata.get("streams", []))
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, AttributeError) as exc:
+        raise DownloadError(f"Could not validate {path.name} with ffprobe ({type(exc).__name__})") from None
+    if result.returncode or not has_video or not math.isfinite(duration) or duration <= 0:
+        raise DownloadError(f"{path.name}: output has no readable video duration")
+    if abs(duration - expected_seconds) > 0.5:
+        raise DownloadError(f"{path.name}: video duration {duration:g}s differs from requested {expected_seconds:g}s")
+
+
 def download_manifest(
     manifest_path: Path,
     output_dir: Path,
     continue_on_error: bool = False,
     skip_existing: bool = True,
     timeout_seconds: float = 120.0,
+    max_height: int = 1080,
 ) -> None:
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive and finite")
+    if isinstance(max_height, bool) or not isinstance(max_height, int) or max_height < 1:
+        raise ValueError("max_height must be a positive integer")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     output_dir.mkdir(parents=True, exist_ok=True)
     failures: list[str] = []
+    ffmpeg_input_args = _ffmpeg_input_args()
 
     for clip in manifest:
         if clip.get("enabled", True) is False:
@@ -237,9 +286,13 @@ def download_manifest(
         if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
             raise ValueError(f"{name}: range must be finite, nonnegative, with end after start")
 
-        if skip_existing:
-            existing = _completed_output(output_dir, name)
-            if existing is not None:
+        existing = _completed_output(output_dir, name)
+        if skip_existing and existing is not None:
+            try:
+                _validate_output(existing, end - start)
+            except DownloadError as exc:
+                print(f"Retrying invalid existing clip: {exc}", file=sys.stderr)
+            else:
                 print(f"Skipping existing clip: {existing}")
                 continue
 
@@ -251,21 +304,26 @@ def download_manifest(
             "socket_timeout": 20,
             "retries": 1,
             "external_downloader_args": {
-                "ffmpeg_i": ["-rw_timeout", "20000000", "-loglevel", "error", "-nostats"],
+                "ffmpeg_i": ffmpeg_input_args,
             },
             # Regression inference needs video only. Prefer H.264 for inexpensive
             # local decoding; avoid a second remote audio input for every slice.
-            "format": "bestvideo[height<=1080][vcodec^=avc1]/bestvideo[height<=1080]/best[height<=1080]/best",
+            "format": (f"bestvideo[height<={max_height}][vcodec^=avc1]/"
+                       f"bestvideo[height<={max_height}]/best[height<={max_height}]"),
             "merge_output_format": "mp4",
             "clip_range": [start, end],
             "force_keyframes_at_cuts": True,
-            "overwrites": not skip_existing,
+            "overwrites": not skip_existing or existing is not None,
             "outtmpl": str(output_dir / f"{name}.%(ext)s"),
         }
         if not shutil.which("deno") and shutil.which("node"):
             options["js_runtimes"] = {"node": {"path": shutil.which("node")}}
         try:
             _download_with_timeout(options, url, timeout_seconds)
+            output = _completed_output(output_dir, name)
+            if output is None:
+                raise DownloadError(f"{name}: worker produced no video output")
+            _validate_output(output, end - start)
         except DownloadError as exc:
             if not continue_on_error:
                 raise
@@ -322,6 +380,10 @@ def main() -> None:
 
     fetch_parser = sub.add_parser("fetch")
     fetch_parser.add_argument(
+        "--max-height", type=int, default=1080,
+        help="Maximum video height; use 720 or 480 to retry an invalid archive format.",
+    )
+    fetch_parser.add_argument(
         "--timeout-seconds", type=float, default=120.0,
         help="Maximum elapsed time per clip, including extraction and ffmpeg (default: 120).",
     )
@@ -377,6 +439,7 @@ def main() -> None:
         continue_on_error=args.continue_on_error,
         skip_existing=not args.overwrite,
         timeout_seconds=args.timeout_seconds,
+        max_height=args.max_height,
     )
 
 

@@ -5,7 +5,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from tools.fetch_test_clips import (
-    _completed_output, _download_with_timeout, build_triage_manifest, download_manifest,
+    _completed_output, _download_with_timeout, _ffmpeg_input_args, _validate_output,
+    build_triage_manifest, download_manifest,
 )
 from yt_dlp.utils import DownloadError
 from tools.review_triage import build_review, promote_labels, main as review_main
@@ -47,6 +48,28 @@ def test_download_timeout_stops_worker_tree(monkeypatch):
     stop.assert_called_once_with(process)
 
 
+@pytest.mark.parametrize("help_text, enabled", [
+    ("  -request_size <int64>\n  -short_seek_size <int>\n", True),
+    ("  -short_seek_size <int>\n", False),
+    ("  -initial_request_size <int64>\n  -short_seek_size <int>\n", False),
+])
+def test_http_range_options_require_ffmpeg_support(monkeypatch, help_text, enabled):
+    monkeypatch.setattr("tools.fetch_test_clips.shutil.which", lambda _: "ffmpeg")
+    monkeypatch.setattr("tools.fetch_test_clips.subprocess.run", lambda *a, **k:
+                        subprocess.CompletedProcess([], 0, stdout=help_text, stderr=""))
+    args = _ffmpeg_input_args()
+    assert ("-request_size" in args) is enabled
+    assert ("-short_seek_size" in args) is enabled
+    assert "-rw_timeout" in args
+
+
+def test_ffmpeg_capability_probe_timeout_keeps_base_options(monkeypatch):
+    monkeypatch.setattr("tools.fetch_test_clips.shutil.which", lambda _: "ffmpeg")
+    probe = MagicMock(side_effect=subprocess.TimeoutExpired("ffmpeg", 5))
+    monkeypatch.setattr("tools.fetch_test_clips.subprocess.run", probe)
+    assert "-request_size" not in _ffmpeg_input_args()
+
+
 def test_failed_download_does_not_stop_batch(tmp_path, monkeypatch):
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps([SOURCE, {**SOURCE, "name": "next"}]))
@@ -54,6 +77,55 @@ def test_failed_download_does_not_stop_batch(tmp_path, monkeypatch):
     monkeypatch.setattr("tools.fetch_test_clips._download_with_timeout", download)
     download_manifest(manifest, tmp_path / "clips", continue_on_error=True)
     assert download.call_count == 2
+
+
+@pytest.mark.parametrize("metadata", [
+    {"format": {"duration": "0"}, "streams": [{"codec_type": "video"}]},
+    {"format": {"duration": "2"}, "streams": [{"codec_type": "video"}]},
+    {"format": {"duration": "10"}, "streams": [{"codec_type": "audio"}]},
+    {"format": {"duration": "nan"}, "streams": [{"codec_type": "video"}]},
+])
+def test_output_validation_rejects_empty_short_and_nonvideo(monkeypatch, tmp_path, metadata):
+    monkeypatch.setattr("tools.fetch_test_clips.subprocess.run", lambda *a, **k:
+                        subprocess.CompletedProcess([], 0, stdout=json.dumps(metadata), stderr=""))
+    with pytest.raises(DownloadError):
+        _validate_output(tmp_path / "clip.mp4", 10)
+
+
+def test_invalid_existing_output_is_replaced_and_validated(tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps([SOURCE]))
+    output = tmp_path / "sample.mp4"
+    output.write_bytes(b"invalid video")
+    validate = MagicMock(side_effect=[DownloadError("empty output"), None])
+    download = MagicMock()
+    monkeypatch.setattr("tools.fetch_test_clips._validate_output", validate)
+    monkeypatch.setattr("tools.fetch_test_clips._download_with_timeout", download)
+    download_manifest(manifest, tmp_path, max_height=720)
+    assert download.call_args.args[0]["overwrites"] is True
+    assert download.call_args.args[0]["format"] == (
+        "bestvideo[height<=720][vcodec^=avc1]/bestvideo[height<=720]/best[height<=720]")
+    assert validate.call_count == 2
+
+
+def test_valid_existing_output_is_skipped_after_validation(tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps([SOURCE]))
+    (tmp_path / "sample.mp4").write_bytes(b"video")
+    validate, download = MagicMock(), MagicMock()
+    monkeypatch.setattr("tools.fetch_test_clips._validate_output", validate)
+    monkeypatch.setattr("tools.fetch_test_clips._download_with_timeout", download)
+    download_manifest(manifest, tmp_path)
+    validate.assert_called_once_with(tmp_path / "sample.mp4", 10)
+    download.assert_not_called()
+
+
+def test_successful_worker_without_output_is_a_download_failure(tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps([SOURCE]))
+    monkeypatch.setattr("tools.fetch_test_clips._download_with_timeout", MagicMock())
+    with pytest.raises(DownloadError, match="no video output"):
+        download_manifest(manifest, tmp_path)
 
 
 def test_promotion_preserves_source_instead_of_label_supplied_url():
